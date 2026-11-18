@@ -1482,7 +1482,7 @@ Program is retained:
 
 - [Owned Program checkpoints](#automatically-checkpoint-an-owned-ghidra-program)
   (`REA_GHIDRA_CHECKPOINT_DIR`) save completed analysis automatically for supported
-  stock native ELF, PE and Mach-O imports on Linux/macOS. Initial analysis must
+  stock native ELF, PE and Mach-O imports on Linux, macOS and Windows x64. Initial analysis must
   finish once; later invocations restore the saved Program without auto-analysis.
   This mode excludes analysis overrides. For customized analysis, reuse a project
   already analyzed with the desired settings rather than discarding those choices
@@ -1590,11 +1590,16 @@ rejects the inherited `-mmacosx-version-min=10.6` flag, retry the make with
 
 ### Automatically checkpoint an owned Ghidra Program
 
-On Linux/macOS, opt in with an absolute storage directory:
+On Linux, macOS and Windows, opt in with an absolute storage directory:
 
 ```bash
 export REA_GHIDRA_CHECKPOINT_DIR=/absolute/rea-checkpoints
 rea decompile /absolute/target/app --procedure entry --provider ghidra --json
+```
+
+```powershell
+$env:REA_GHIDRA_CHECKPOINT_DIR = 'D:\rea-checkpoints'
+rea decompile D:\target\app.exe --procedure entry --provider ghidra --json
 ```
 
 Use the same setting in the MCP server environment. CLI and MCP share the
@@ -1613,8 +1618,9 @@ enabling checkpoint mode requires the startup environment and an MCP restart.
 
 Storage is separated by target SHA-256 and analysis-profile identity, including
 the supported Ghidra version. Identical executable bytes at another path can
-reuse the Program. One live REA session holds the checkpoint's socket lease;
-a competing session reports that owner and must wait until it closes. Only
+reuse the Program. One live REA session holds the checkpoint lease (a Unix
+socket on Linux/macOS, a named pipe on Windows); a competing session reports
+that owner and must wait until it closes. Only
 REA-owned Programs are checkpointed. Caller-selected existing projects retain
 their separate read-only workflow below.
 
@@ -1623,9 +1629,10 @@ writes and syncs a new packed file before atomically replacing the manifest;
 superseded files are removed after publication. A failed save preserves the
 previous checkpoint and the live session for retry. Correct the reported storage
 problem, then call `close_binary` again. Incomplete cleanup retains its owner.
-Corrupt, malformed or changed checkpoints fail explicitly instead of falling
-back to a fresh import. Preserve that directory and repair it or explicitly
-select a new directory to start fresh.
+A damaged or checksum-mismatched checkpoint is quarantined as
+`current.invalid-*.json` and the session performs a fresh analysis; manifest
+traversal and identity mismatches still fail explicitly. Preserve the
+directory if you want to inspect the quarantined evidence.
 
 Recovery reaches **the last successfully saved checkpoint**. Cancellation,
 process failure or a killed CLI can lose later edits; unfinished first-time
@@ -1635,11 +1642,21 @@ remains ephemeral. Packed Program import, checksums, and saving consume disk and
 time proportional to Program size; saving runs once after first analysis and
 again only when the Program changes.
 
-This initial mode supports stock native ELF, PE and Mach-O imports on POSIX.
-Windows, special pinned-loader profiles, caller-selected `.gpr` projects,
-language/analyzer overrides, analysis seeds and extra analysis extensions are
-not admitted with this setting; unset it to use their existing workflows.
-The checkpoint directory must be private to the current user.
+This initial mode supports stock native ELF, PE and Mach-O imports on Linux,
+macOS and Windows x64. Special pinned-loader profiles, caller-selected `.gpr`
+projects, language/analyzer overrides, analysis seeds and extra analysis
+extensions are not admitted with this setting; unset it to use their existing
+workflows. The checkpoint directory must be private to the current user.
+
+On Windows the privacy rule is enforced through the directory ACL: no account
+other than the current user, SYSTEM and `BUILTIN\Administrators` may hold write
+access to the configured root. REA removes inherited permissions on cache
+directories it creates, hardens an empty root it is given, and refuses a
+populated root that other accounts can replace. Point the setting at a dedicated
+folder (for example `D:\rea-checkpoints`), not at `%TEMP%`, which normally grants
+`Authenticated Users` modify access. See
+[Windows checkpoints](../windows/checkpoints.md) for the ACL commands and the
+Windows-specific limitations (sessions stay read-only for database edits).
 
 REA analysis snapshots remain separate immutable query results. Initial analysis
 has a stable generation bound to the target and analysis profile: publishing its

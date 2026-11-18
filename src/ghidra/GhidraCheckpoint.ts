@@ -7,11 +7,19 @@ import {
   lstat,
   mkdir,
   open,
+  readdir,
   realpath,
   rename,
   rm,
 } from "node:fs/promises";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { tmpdir } from "node:os";
+import {
+  adjustWindowsCheckpointDirectory,
+  assertWindowsCheckpointDirectoryPrivate,
+  assertWindowsCheckpointRootPrivate,
+} from "../windows/WindowsCheckpointDirectory.js";
+import { HOST_PLATFORM } from "../platform/HostPlatform.js";
 import { z } from "zod";
 import type { AnalysisProfileCommitment } from "../domain/analysisProfile.js";
 import { ConfigurationError } from "../domain/configurationErrors.js";
@@ -146,6 +154,15 @@ async function readSource(
     );
   } catch (cause: unknown) {
     if (missing(cause) && !resources.hasPending) return null;
+    let primary: unknown = cause;
+    try {
+      primary = artifactFilePrimaryFacts(cause).cause;
+    } catch {}
+    if (
+      (primary instanceof SyntaxError || primary instanceof z.ZodError) &&
+      (await quarantineManifest(selection.directory))
+    )
+      return null;
     throw classifyProviderFailure(
       mapArtifactFileFailure(cause, (primary) =>
         primary instanceof SyntaxError || primary instanceof z.ZodError
@@ -170,17 +187,33 @@ async function readSource(
   try {
     actual = await hashGhidraPackedProgram(path, resources, signal);
   } catch (cause: unknown) {
+    // A vanished blob is a damaged cache, not a broken profile: quarantine the
+    // manifest so the caller performs a fresh analysis instead of failing.
+    if (missing(cause) && (await quarantineManifest(selection.directory)))
+      return null;
     throw classifyProviderFailure(
       cause,
       ghidraFileDialect("resolve_analysis_profile", { path }),
     );
   }
-  if (actual !== manifest.source.sha256)
-    throw failure(
-      selection.directory,
-      "the packed Program checksum differs from its manifest",
-    );
+  if (actual !== manifest.source.sha256) {
+    await quarantineManifest(selection.directory);
+    return null;
+  }
   return manifest.source;
+}
+
+/** Rename a damaged manifest out of the way; the integrity check never admits it. */
+async function quarantineManifest(directory: string): Promise<boolean> {
+  try {
+    await rename(
+      appendCallerPath(directory, "current.json"),
+      appendCallerPath(directory, `current.invalid-${randomUUID()}.json`),
+    );
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Resolve storage and content identity once for the shared CLI/MCP analysis profile. */
@@ -203,6 +236,88 @@ export async function resolveGhidraCheckpoint(
     state: checkpointState(await readSource(selection, resources, signal)),
   };
 }
+
+const directoryExists = async (path: string): Promise<boolean> => {
+  try {
+    await lstat(path);
+    return true;
+  } catch (cause: unknown) {
+    if (missing(cause)) return false;
+    throw cause;
+  }
+};
+
+/**
+ * Establish a private cache directory once per session.
+ *
+ * POSIX keeps the upstream owner-only mode check. Windows has no POSIX mode:
+ * REA hardens every cache directory it creates (removing inherited ACEs) and
+ * proves the result, while a caller-selected root is inspected only so an
+ * explicitly configured directory is never re-permissioned behind the user.
+ */
+const ensurePrivateCheckpointDirectory = async (
+  directory: string,
+  signal?: AbortSignal,
+): Promise<void> => {
+  if (HOST_PLATFORM.platform !== "win32") {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    const state = await lstat(directory);
+    if (
+      !state.isDirectory() ||
+      (state.mode & 0o077) !== 0 ||
+      (process.getuid !== undefined && state.uid !== process.getuid())
+    )
+      throw failure(
+        directory,
+        "the checkpoint directory must be a private directory owned by this user",
+      );
+    return;
+  }
+  const root = dirname(directory);
+  const rootExisted = await directoryExists(root);
+  const keyExisted = await directoryExists(directory);
+  try {
+    if (!rootExisted) {
+      await mkdir(root, { recursive: true });
+      await adjustWindowsCheckpointDirectory(root);
+    } else {
+      let privateRoot = true;
+      try {
+        await assertWindowsCheckpointRootPrivate(root);
+      } catch {
+        privateRoot = false;
+      }
+      if (!privateRoot) {
+        // An empty caller-selected root is dedicated to this cache, so REA may
+        // replace its inherited DACL. A populated one belongs to the user and
+        // is refused rather than re-permissioned behind their back.
+        if ((await readdir(root)).length > 0)
+          throw new Error(
+            `the checkpoint root ${JSON.stringify(root)} is writable by other accounts; choose a dedicated empty directory or remove their write access`,
+          );
+        await adjustWindowsCheckpointDirectory(root);
+      }
+    }
+    if (keyExisted) await assertWindowsCheckpointDirectoryPrivate(directory);
+    else {
+      await mkdir(directory, { recursive: true });
+      await adjustWindowsCheckpointDirectory(directory);
+    }
+  } catch (cause: unknown) {
+    throw failure(
+      directory,
+      `the checkpoint directory must stay private to this user: ${errorMessage(cause)}`,
+      cause,
+    );
+  }
+  assertArtifactReadActive(signal);
+  const state = await lstat(directory);
+  if (!state.isDirectory() || state.isSymbolicLink())
+    throw failure(
+      directory,
+      "the checkpoint directory must be a real directory, not a link or reparse point",
+    );
+};
 
 /** One session owns publication, the socket lease, and any failed staging cleanup. */
 export class GhidraCheckpoint {
@@ -245,23 +360,13 @@ export class GhidraCheckpoint {
     signal?: AbortSignal,
   ): Promise<GhidraPackedProgram | undefined> {
     assertArtifactReadActive(signal);
-    await mkdir(this.selection.directory, { recursive: true, mode: 0o700 });
-    const state = await lstat(this.selection.directory);
-    if (
-      !state.isDirectory() ||
-      (state.mode & 0o077) !== 0 ||
-      (process.getuid !== undefined && state.uid !== process.getuid())
-    )
-      throw failure(
-        this.selection.directory,
-        "the checkpoint directory must be a private directory owned by this user",
-      );
+    await ensurePrivateCheckpointDirectory(this.selection.directory, signal);
     const directory = await realpath(this.selection.directory);
     const acquired = await acquireOwnedLease({
       identity: { kind: "ghidra-checkpoint-v1", directory },
       runId,
       directory: join(
-        "/tmp",
+        HOST_PLATFORM.platform === "win32" ? tmpdir() : "/tmp",
         `rea-ghidra-checkpoint-leases-${process.getuid?.() ?? "user"}`,
       ),
       resources: this.resources,

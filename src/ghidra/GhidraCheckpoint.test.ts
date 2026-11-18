@@ -5,6 +5,7 @@ import {
   mkdtemp,
   mkdir,
   readFile,
+  readdir,
   writeFile,
   rm,
   rename,
@@ -292,15 +293,24 @@ it.skipIf(process.platform === "win32")(
     expect(record.source.kind).toBe("initial-analysis");
     const unknown = JSON.stringify({ ...record, version: 1 });
     await writeFile(path, unknown);
-    await expect(
-      resolveGhidraCheckpoint(f.root, target, profile, f.resources),
-    ).rejects.toThrow(/manifest is malformed/);
-    expect(await readFile(path, "utf8")).toBe(unknown);
+    const recovered = await resolveGhidraCheckpoint(
+      f.root,
+      target,
+      profile,
+      f.resources,
+    );
+    expect(recovered.state).toEqual(f.selection.state);
+    await expect(readFile(path, "utf8")).rejects.toThrow();
+    expect(
+      (await readdir(f.selection.directory)).some((name) =>
+        name.startsWith("current.invalid-"),
+      ),
+    ).toBe(true);
   },
 );
 
 it.skipIf(process.platform === "win32")(
-  "rejects corruption, malformed manifests, and traversal rather than silently importing fresh",
+  "quarantines corruption and malformed manifests but still rejects traversal",
   async () => {
     const f = await fixture();
     await f.owner.acquire("first");
@@ -312,9 +322,18 @@ it.skipIf(process.platform === "win32")(
       join(f.selection.directory, manifest.source.file),
       "corrupt",
     );
-    await expect(
-      resolveGhidraCheckpoint(f.root, target, profile, f.resources),
-    ).rejects.toThrow(/checksum/);
+    const afterCorruption = await resolveGhidraCheckpoint(
+      f.root,
+      target,
+      profile,
+      f.resources,
+    );
+    expect(afterCorruption.state).toEqual(f.selection.state);
+    expect(
+      (await readdir(f.selection.directory)).some((name) =>
+        name.startsWith("current.invalid-"),
+      ),
+    ).toBe(true);
     await writeFile(
       manifestPath,
       JSON.stringify({
@@ -326,9 +345,14 @@ it.skipIf(process.platform === "win32")(
       resolveGhidraCheckpoint(f.root, target, profile, f.resources),
     ).rejects.toThrow();
     await writeFile(manifestPath, "{");
-    await expect(
-      resolveGhidraCheckpoint(f.root, target, profile, f.resources),
-    ).rejects.toThrow();
+    const afterMalformed = await resolveGhidraCheckpoint(
+      f.root,
+      target,
+      profile,
+      f.resources,
+    );
+    expect(afterMalformed.state).toEqual(f.selection.state);
+    await expect(readFile(manifestPath, "utf8")).rejects.toThrow();
   },
 );
 
@@ -494,4 +518,72 @@ it.skipIf(process.platform === "win32")(
       owner.observation.source?.sha256,
     );
   },
+);
+
+it.skipIf(process.platform !== "win32")(
+  "hardens its Windows cache directory and restores the published Program for a new owner",
+  async () => {
+    const f = await fixture();
+    const cacheRoot = join(f.root, "cache");
+    const selection = await resolveGhidraCheckpoint(
+      cacheRoot,
+      target,
+      profile,
+      f.resources,
+    );
+    const owner = new GhidraCheckpoint(selection, f.resources);
+    owners.push(owner);
+    expect(await owner.acquire("first")).toBeUndefined();
+    await owner.publish(f.packed);
+    const published = owner.observation.source;
+    expect(published).not.toBeNull();
+    await owner.close();
+    const reloaded = await resolveGhidraCheckpoint(
+      cacheRoot,
+      target,
+      profile,
+      f.resources,
+    );
+    const resumed = new GhidraCheckpoint(reloaded, f.resources);
+    owners.push(resumed);
+    const restored = await resumed.acquire("second");
+    expect(restored?.sha256).toBe(published?.sha256);
+    expect(restored?.path.endsWith(published?.file ?? "")).toBe(true);
+  },
+  120_000,
+);
+
+it.skipIf(process.platform !== "win32")(
+  "quarantines a damaged Windows checkpoint and re-analyses",
+  async () => {
+    const f = await fixture();
+    const cacheRoot = join(f.root, "cache");
+    const selection = await resolveGhidraCheckpoint(
+      cacheRoot,
+      target,
+      profile,
+      f.resources,
+    );
+    const owner = new GhidraCheckpoint(selection, f.resources);
+    owners.push(owner);
+    expect(await owner.acquire("first")).toBeUndefined();
+    await owner.publish(f.packed);
+    const published = owner.observation.source;
+    expect(published).not.toBeNull();
+    await owner.close();
+    await writeFile(join(selection.directory, published?.file ?? ""), "junk");
+    const reloaded = await resolveGhidraCheckpoint(
+      cacheRoot,
+      target,
+      profile,
+      f.resources,
+    );
+    expect(reloaded.state).toEqual(selection.state);
+    expect(
+      (await readdir(selection.directory)).some((name) =>
+        name.startsWith("current.invalid-"),
+      ),
+    ).toBe(true);
+  },
+  120_000,
 );

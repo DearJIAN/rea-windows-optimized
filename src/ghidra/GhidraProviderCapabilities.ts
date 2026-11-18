@@ -31,8 +31,14 @@ const providerOperations = Object.freeze([
 /** Health limitations shared by every Ghidra-backed capability. */
 export const healthLimitations = Object.freeze([
   "The session serves operations only after Ghidra reports default auto-analysis complete; incomplete analysis does not expose partial results.",
-  "Ghidra Program checkpoint mode is disabled: closing discards metadata edits; original executable bytes are unchanged. For stock ELF/PE/Mach-O on Linux/macOS, set REA_GHIDRA_CHECKPOINT_DIR to a private absolute directory before starting REA (restart MCP after changing its startup environment).",
+  "Ghidra Program checkpoint mode is disabled by default: closing discards session metadata edits; original executable bytes are unchanged. Set REA_GHIDRA_CHECKPOINT_DIR to an absolute private directory before starting REA to restore completed analysis for the same target and profile (restart MCP after changing its startup environment).",
   "Cancelling an active Ghidra request terminates its ephemeral database and discards session annotations. The selected target remains open; the next provider query imports the original artifact again.",
+]);
+
+/** Additional limitations applied to checkpointed Windows sessions. */
+export const windowsCheckpointLimitations = Object.freeze([
+  "Windows checkpoint sessions stay read-only for database edits: the saved Packed Program carries completed auto-analysis, while caller renames or comments are not admitted.",
+  "The checkpoint root must not grant write access to accounts other than the current user, SYSTEM and BUILTIN\\Administrators. REA removes inherited permissions on cache directories it creates, and refuses a caller-selected root that other accounts can replace.",
 ]);
 
 /** Additional limitations applied to the experimental Windows x64 P0 boundary. */
@@ -342,12 +348,17 @@ export const existingProjectCapabilities = (
 /** Capabilities advertised for the experimental Windows x64 P0 boundary. */
 export const windowsP0Capabilities = (
   readiness: WindowsNativeReadiness = inspectWindowsNativeReadiness("win32"),
+  source: "fresh-import" | "owned-checkpoint" = "fresh-import",
 ): readonly CapabilityDescriptor[] => {
+  const sourceLimitations = Object.freeze([
+    ...windowsP0Limitations,
+    ...(source === "owned-checkpoint" ? windowsCheckpointLimitations : []),
+  ]);
   return Object.freeze(
     CAPABILITIES.map((capability): CapabilityDescriptor => {
       const limitations = Object.freeze([
-        ...capability.limitations,
-        ...windowsP0Limitations,
+        ...limitationsFor(capability.operation, source),
+        ...sourceLimitations,
       ]);
       if (capability.effects.mutatesArtifact)
         return Object.freeze({

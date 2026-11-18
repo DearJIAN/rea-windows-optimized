@@ -92,8 +92,8 @@ const environmentSchema = z.object({
     .string()
     .min(1)
     .refine(
-      (value) => value.startsWith("/") && !value.includes("\0"),
-      "must be an absolute POSIX directory path",
+      (value) => isAbsolute(value) && !value.includes("\0"),
+      "must be an absolute directory path",
     )
     .optional(),
   REA_GHIDRA_PROGRAM_NAME: ghidraProgramNameSchema.optional(),

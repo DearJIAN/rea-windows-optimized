@@ -556,8 +556,8 @@ do not infer that restoration happened merely because checkpoint mode is enabled
 In ephemeral mode, choose a private absolute directory and set
 `REA_GHIDRA_CHECKPOINT_DIR` in the environment starting REA. Restart the MCP server
 after changing that launch configuration; no current tool call or runtime
-analysis-setting update enables it. Stock ELF/PE/Mach-O imports on Linux/macOS
-are supported; see the [checkpoint setup and limitations](https://github.com/morluto/rea/blob/main/docs/getting-started/installation.md#automatically-checkpoint-an-owned-ghidra-program).
+analysis-setting update enables it. Stock ELF/PE/Mach-O imports on Linux, macOS
+and Windows x64 are supported; see the [checkpoint setup and limitations](https://github.com/morluto/rea/blob/main/docs/getting-started/installation.md#automatically-checkpoint-an-owned-ghidra-program).
 
 With the setting enabled, normal opens restore compatible saved Programs
 automatically. Initial completed analysis is saved, and `close_binary` saves

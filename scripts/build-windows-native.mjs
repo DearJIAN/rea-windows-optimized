@@ -41,9 +41,12 @@ const run = (command, args) => {
     );
   return result.stdout;
 };
-if (process.platform !== "linux")
+// Upstream builds this lane on Linux with MinGW-w64. A Windows host with the
+// same MinGW-w64 toolchain (MSYS2 mingw64) produces an equivalent Node-API
+// artifact, so the fork admits that host instead of requiring a Linux machine.
+if (process.platform !== "linux" && process.platform !== "win32")
   throw new Error(
-    "The Windows x64 artifact build lane currently requires Linux and MinGW-w64.",
+    "The Windows x64 artifact build lane requires Linux or Windows with MinGW-w64.",
   );
 run(compiler, ["--version"]);
 await mkdir(cache, { recursive: true });
@@ -119,7 +122,10 @@ await writeFile(
   definition,
   `LIBRARY node.exe\nEXPORTS\n${symbols.join("\n")}\n`,
 );
-run("x86_64-w64-mingw32-dlltool", ["-d", definition, "-y", library]);
+// MSYS2 installs the unprefixed dlltool; Linux cross packages use the triple.
+const dlltool =
+  process.platform === "win32" ? "dlltool" : "x86_64-w64-mingw32-dlltool";
+run(dlltool, ["-d", definition, "-y", library]);
 run(compiler, [
   "-std=c++17",
   "-O2",

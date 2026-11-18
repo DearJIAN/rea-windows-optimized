@@ -173,7 +173,12 @@ export class GhidraProvider implements AnalysisProviderCandidate {
     return this.config.ghidraExistingProject !== undefined
       ? existingProjectCapabilities(platform)
       : platform === "win32"
-        ? windowsP0Capabilities()
+        ? windowsP0Capabilities(
+            undefined,
+            this.config.ghidraCheckpointDirectory === undefined
+              ? "fresh-import"
+              : "owned-checkpoint",
+          )
         : this.config.ghidraCheckpointDirectory === undefined
           ? CAPABILITIES
           : checkpointCapabilities();
@@ -221,7 +226,12 @@ export class GhidraProvider implements AnalysisProviderCandidate {
             ? this.config.ghidraCheckpointDirectory === undefined
               ? CAPABILITIES
               : checkpointCapabilities()
-            : windowsP0Capabilities(readiness),
+            : windowsP0Capabilities(
+                readiness,
+                this.config.ghidraCheckpointDirectory === undefined
+                  ? "fresh-import"
+                  : "owned-checkpoint",
+              ),
     };
   }
 
@@ -540,8 +550,7 @@ export class GhidraProvider implements AnalysisProviderCandidate {
     const checkpointDirectory = this.config.ghidraCheckpointDirectory;
     if (
       checkpointDirectory !== undefined &&
-      (installation.platform === "win32" ||
-        target.kind !== "executable" ||
+      (target.kind !== "executable" ||
         !(
           target.format === "elf" ||
           target.format === "pe" ||
@@ -557,13 +566,13 @@ export class GhidraProvider implements AnalysisProviderCandidate {
     )
       return err(
         new ConfigurationError(
-          "Ghidra checkpoints currently support stock ELF/PE/Mach-O imports on Linux/macOS",
+          "Ghidra checkpoints currently support stock ELF/PE/Mach-O imports",
           {
             settings: [
               {
                 setting: "REA_GHIDRA_CHECKPOINT_DIR",
                 constraint:
-                  "Select a stock native import on Linux/macOS, or unset this setting for the existing ephemeral workflow.",
+                  "Select a stock native import, or unset this setting for the existing ephemeral workflow.",
               },
             ],
           },

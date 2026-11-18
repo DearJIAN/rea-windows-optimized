@@ -1022,6 +1022,7 @@ export class GhidraClient {
     // Admit the bridge ceilings before acquiring anything: an invalid launch
     // seed is a configuration refusal, not a failure after Ghidra started.
     // The admitted ceilings are kept for this session's cleanup requests.
+    const startedAt = Date.now();
     const limits = this.#wire.admitSessionLimits();
     if (!limits.ok) return limits;
     let packedProgram: GhidraPackedProgram | undefined;
@@ -1031,6 +1032,13 @@ export class GhidraClient {
         deadline.signal,
       );
       this.#checkpointRestore = packedProgram;
+      this.#logger.debug(
+        {
+          durationMs: Date.now() - startedAt,
+          restoredCheckpoint: packedProgram !== undefined,
+        },
+        "Ghidra checkpoint admission completed",
+      );
     } catch (cause: unknown) {
       return this.#startupFailure(
         deadline.signal.aborted
@@ -1111,6 +1119,7 @@ export class GhidraClient {
     this.#lineage.reset();
     this.#runId = this.#options.runId ?? randomUUID();
     this.#memoryCgroupBaseline = await this.#readMemoryCgroup();
+    const launchStartedAt = Date.now();
     const launched = await this.#options.launcher
       .launch(
         {
@@ -1124,6 +1133,9 @@ export class GhidraClient {
           providerVersion: this.#options.providerVersion,
           profileDigest: this.#options.profileDigest,
           ...(packedProgram === undefined ? {} : { packedProgram }),
+          ...(this.#checkpoint === undefined
+            ? {}
+            : { checkpointAuthority: true }),
         },
         { signal: deadline.signal, resourceScope: this.#fileResources },
       )
@@ -1161,13 +1173,25 @@ export class GhidraClient {
       return this.#startupFailure(failure, deadline);
     }
     this.#launch = launched.value;
+    this.#logger.debug(
+      {
+        durationMs: Date.now() - launchStartedAt,
+        restoredCheckpoint: packedProgram !== undefined,
+      },
+      "Ghidra session process is ready",
+    );
     this.#process = new ProviderProcessSupervisor(launched.value, {
       maxDiagnosticBytes: GHIDRA_PROCESS_DIAGNOSTIC_BYTES,
       runtime: "jvm",
       onDiagnostic: (event) => this.#onProcessDiagnostic(event),
     });
     this.#startupOutputCheckpoint = this.#process.checkpointOutput();
+    const handshakeStartedAt = Date.now();
     const completed = await this.#connectAndHandshake(endpoint, deadline);
+    this.#logger.debug(
+      { durationMs: Date.now() - handshakeStartedAt },
+      "Ghidra bridge handshake completed",
+    );
     if (!completed.ok) return this.#startupFailure(completed.error, deadline);
     try {
       await this.#lineage.observe(this.#launch);

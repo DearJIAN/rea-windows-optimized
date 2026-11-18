@@ -81,6 +81,21 @@ it("keeps the caller's opt-in Ghidra checkpoint directory and leaves it disabled
   expect(parseConfig({ REA_GHIDRA_CHECKPOINT_DIR: "relative" }).ok).toBe(false);
 });
 
+it.skipIf(process.platform !== "win32")(
+  "accepts a Windows absolute Ghidra checkpoint directory",
+  () => {
+    const selected = parseConfig({
+      REA_GHIDRA_CHECKPOINT_DIR: "D:\\rea-checkpoints",
+    });
+    expect(selected.ok && selected.value.ghidraCheckpointDirectory).toBe(
+      "D:\\rea-checkpoints",
+    );
+    expect(
+      parseConfig({ REA_GHIDRA_CHECKPOINT_DIR: "rea-checkpoints" }).ok,
+    ).toBe(false);
+  },
+);
+
 it.each([
   ["REA_GHIDRA_PROJECT_PATH", "/tmp/selected.gpr"],
   ["REA_GHIDRA_SEED_FILE", "/tmp/seeds.json"],

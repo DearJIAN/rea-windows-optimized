@@ -87,6 +87,8 @@ export interface GhidraLaunchSession {
   readonly providerVersion: string;
   readonly profileDigest: string;
   readonly packedProgram?: import("./GhidraCheckpoint.js").GhidraPackedProgram;
+  /** The bridge may export a Packed Program for this session's owned checkpoint. */
+  readonly checkpointAuthority?: boolean;
 }
 
 /** Process plus private log coordinates returned by a Ghidra launcher. */
@@ -405,6 +407,9 @@ export class GhidraHeadlessLauncher implements GhidraLauncher {
           provider_version: session.providerVersion,
           profile_digest: session.profileDigest,
           ...(existingProject === undefined ? {} : { existing_project: true }),
+          ...(session.checkpointAuthority === true
+            ? { checkpoint_authority: true }
+            : {}),
           ...(this.options.decompileTimeoutSeconds === undefined
             ? {}
             : {

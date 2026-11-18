@@ -195,7 +195,10 @@ export const ghidraJavaLaunch = async (options: {
       ...(options.platform === "darwin" ? ["-Xdock:name=Ghidra-Headless"] : []),
       `-Xmx${configuredMaxHeap}`,
       "-XX:ParallelGCThreads=2",
-      "-XX:CICompilerCount=2",
+      // Ghidra's headless startup is JIT-bound; limiting C1/C2 to two threads
+      // adds several seconds to every session launch. Keep the compiler pool at
+      // the JVM default and leave GC threads capped for memory predictability.
+      "-XX:CICompilerCount=4",
       "-Djava.awt.headless=true",
       ...isolatedProperties,
       "-showversion",

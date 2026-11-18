@@ -533,7 +533,7 @@ public final class ReaGhidraBridge extends HeadlessScript {
     /** Internal lifecycle request: the destination is inside this owned runtime. */
     private JsonObject checkpointProgram(JsonObject params, SessionDescriptor descriptor) throws Exception {
         requireKeys(params, Set.of("path", "force"));
-        if (descriptor.existingProject || !descriptor.transport.equals("unix-socket"))
+        if (descriptor.existingProject || !descriptor.checkpointAuthority)
             throw new RequestFailure("method_unavailable", "This Program has no checkpoint authority");
         Path output = Path.of(requireString(params, "path")).toAbsolutePath().normalize();
         if (!output.getParent().equals(checkpointDirectory) ||
@@ -5362,6 +5362,8 @@ public final class ReaGhidraBridge extends HeadlessScript {
             keys.add("decompile_timeout_seconds");
         if (parsed.isJsonObject() && parsed.getAsJsonObject().has("existing_project"))
             keys.add("existing_project");
+        if (parsed.isJsonObject() && parsed.getAsJsonObject().has("checkpoint_authority"))
+            keys.add("checkpoint_authority");
         JsonObject object = requireObject(parsed, keys);
         int decompileTimeout = 0;
         if (object.has("decompile_timeout_seconds")) {
@@ -5379,7 +5381,8 @@ public final class ReaGhidraBridge extends HeadlessScript {
             requireString(object, "profile_digest"),
             object.has("analysis_extensions") ? object.getAsJsonArray("analysis_extensions") : new JsonArray(),
             decompileTimeout,
-            object.has("existing_project") && requireBoolean(object, "existing_project")
+            object.has("existing_project") && requireBoolean(object, "existing_project"),
+            object.has("checkpoint_authority") && requireBoolean(object, "checkpoint_authority")
         );
     }
 
@@ -5644,7 +5647,8 @@ public final class ReaGhidraBridge extends HeadlessScript {
         String profileDigest,
         JsonArray analysisExtensions,
         int decompileTimeoutSeconds,
-        boolean existingProject
+        boolean existingProject,
+        boolean checkpointAuthority
     ) {}
     private static ValueFlowLimits defaultValueFlowLimits() {
         return new ValueFlowLimits(DEFAULT_HIGH_PCODE_OPS, DEFAULT_HIGH_PCODE_INPUTS_PER_OP, DEFAULT_HIGH_PCODE_DEF_USE_EDGES);
