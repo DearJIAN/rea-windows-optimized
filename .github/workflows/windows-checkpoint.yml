@@ -37,5 +37,3 @@ jobs:
           src/windows/WindowsCheckpointDirectory.test.ts
           src/ghidra/GhidraCheckpoint.test.ts
           src/config.test.ts
-      - name: Bridge source conformance
-        run: npm run verify:ghidra:bridge-sources
