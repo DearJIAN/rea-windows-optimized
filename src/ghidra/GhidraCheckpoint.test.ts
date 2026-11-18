@@ -7,6 +7,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  realpath,
   writeFile,
   rm,
   rename,
@@ -202,7 +203,7 @@ it("publishes a verified state, reopens it, and separates target and analysis id
   const resumed = new GhidraCheckpoint(loaded, f.resources);
   owners.push(resumed);
   expect(await resumed.acquire("second")).toEqual({
-    path: join(loaded.directory, saved.file),
+    path: join(await realpath(loaded.directory), saved.file),
     sha256: saved.sha256,
   });
   expect(
