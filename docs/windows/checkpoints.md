@@ -70,11 +70,22 @@ compatibility and analysis equivalence:
 ```powershell
 npm run verify:ghidra:checkpoints:windows -- `
   --binary D:\samples\app.dll --binary-b D:\samples\other.dll `
-  --checkpoint D:\rea-checkpoints
+  --checkpoint D:\rea-checkpoints `
+  --probe 0x10041eb0 --probe 0x1004fa00 --probe-b 0x10001000
 ```
 
-Reports land in `reports/windows-checkpoints/` (git-ignored). Add
-`--without-checkpoint` to measure the same build with the cache disabled.
+A run including `cold` creates a fresh child directory under the selected
+checkpoint root and prints its path; existing entries are retained. Set `--probe`
+(repeatable) to valid function addresses in the first binary and `--probe-b` to
+a valid function in the second. The defaults are specific to the reference DLLs.
+Reports land in `reports/windows-checkpoints/` (git-ignored) and may contain
+sample-derived analysis; review them before sharing. The harness fails on a
+failed required operation, failed comparison, incorrect lease outcome, missing
+quarantine, or missing mutation checkpoint. `profile` and cache-disabled control
+runs are not implemented by this harness. A subset run without `cold` uses the
+specified existing root; equivalence is only checked when both cold and restart
+are selected. Crash recovery checks recovery after terminating the MCP process;
+it does not establish exactly which Ghidra startup stage had been reached.
 
 ## Enable, disable, clear
 

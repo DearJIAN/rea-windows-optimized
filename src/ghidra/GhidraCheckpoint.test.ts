@@ -70,54 +70,52 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
-it.skipIf(process.platform === "win32")(
-  "retains lease identity after release fails and releases it on retry",
-  async () => {
-    const f = await fixture();
-    const actual = await vi.importActual<
-      typeof import("../process/OwnedLease.js")
-    >("../process/OwnedLease.js");
-    vi.mocked(acquireOwnedLease).mockImplementationOnce(async (input) => {
-      const result = await actual.acquireOwnedLease(input);
-      if (!result.acquired) return result;
-      let failed = false;
-      return {
-        acquired: true,
-        lease: {
-          ...result.lease,
-          release: async () => {
-            if (!failed) {
-              failed = true;
-              throw new Error("controlled lease release failure");
-            }
-            await result.lease.release();
-          },
+it("retains lease identity after release fails and releases it on retry", async () => {
+  const f = await fixture();
+  const actual = await vi.importActual<
+    typeof import("../process/OwnedLease.js")
+  >("../process/OwnedLease.js");
+  vi.mocked(acquireOwnedLease).mockImplementationOnce(async (input) => {
+    const result = await actual.acquireOwnedLease(input);
+    if (!result.acquired) return result;
+    let failed = false;
+    return {
+      acquired: true,
+      lease: {
+        ...result.lease,
+        release: async () => {
+          if (!failed) {
+            failed = true;
+            throw new Error("controlled lease release failure");
+          }
+          await result.lease.release();
         },
-      };
-    });
-    await f.owner.acquire("original");
-    const retained = [...f.owner.cleanupResources];
-    expect(retained).toHaveLength(1);
-    await expect(f.owner.close()).rejects.toThrow(
-      "controlled lease release failure",
-    );
-    expect(f.owner.cleanupResources).toEqual(retained);
-    expect(f.owner.hasResources).toBe(true);
-    await f.owner.close();
-    expect(f.owner.cleanupResources).toEqual([]);
-    const peer = new GhidraCheckpoint(f.selection, f.resources);
-    owners.push(peer);
-    expect(await peer.acquire("replacement")).toBeUndefined();
-  },
-);
+      },
+    };
+  });
+  await f.owner.acquire("original");
+  const retained = [...f.owner.cleanupResources];
+  expect(retained).toHaveLength(1);
+  await expect(f.owner.close()).rejects.toThrow(
+    "controlled lease release failure",
+  );
+  expect(f.owner.cleanupResources).toEqual(retained);
+  expect(f.owner.hasResources).toBe(true);
+  await f.owner.close();
+  expect(f.owner.cleanupResources).toEqual([]);
+  const peer = new GhidraCheckpoint(f.selection, f.resources);
+  owners.push(peer);
+  expect(await peer.acquire("replacement")).toBeUndefined();
+}, 120_000);
 const profile = createAnalysisProfile(
   { id: "ghidra", name: "Ghidra", version: "12.1.4" },
   { import_mode: "test" },
 );
 const target = "1".repeat(64);
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "rea-checkpoint-test-"));
-  roots.push(root);
+  const fixtureRoot = await mkdtemp(join(tmpdir(), "rea-checkpoint-test-"));
+  roots.push(fixtureRoot);
+  const root = join(fixtureRoot, "cache-root");
   const resources = new ArtifactResourceScope();
   const selection = await resolveGhidraCheckpoint(
     root,
@@ -127,7 +125,7 @@ async function fixture() {
   );
   const owner = new GhidraCheckpoint(selection, resources);
   owners.push(owner);
-  const packed = join(root, "fixture.gzf");
+  const packed = join(fixtureRoot, "fixture.gzf");
   await writeFile(packed, "controlled packed bytes");
   return { root, resources, selection, owner, packed };
 }
@@ -187,65 +185,59 @@ it.skipIf(process.platform === "win32").each(
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "publishes a verified state, reopens it, and separates target and analysis identities",
-  async () => {
-    const f = await fixture();
-    expect(f.selection.state).toEqual({ kind: "initial-analysis" });
-    expect(await f.owner.acquire("first")).toBeUndefined();
-    await f.owner.publish(f.packed);
-    await f.owner.close();
-    const loaded = await resolveGhidraCheckpoint(
-      f.root,
-      target,
-      profile,
-      f.resources,
-    );
-    expect(loaded.state).toEqual(f.selection.state);
-    const saved = f.owner.observation.source!;
-    const resumed = new GhidraCheckpoint(loaded, f.resources);
-    owners.push(resumed);
-    expect(await resumed.acquire("second")).toEqual({
-      path: join(loaded.directory, saved.file),
-      sha256: saved.sha256,
-    });
-    expect(
-      (
-        await resolveGhidraCheckpoint(
-          f.root,
-          "2".repeat(64),
-          profile,
-          f.resources,
-        )
-      ).key,
-    ).not.toBe(f.selection.key);
-    expect(
-      (
-        await resolveGhidraCheckpoint(
-          f.root,
-          target,
-          createAnalysisProfile(profile.provider, { import_mode: "other" }),
-          f.resources,
-        )
-      ).key,
-    ).not.toBe(f.selection.key);
-  },
-);
+it("publishes a verified state, reopens it, and separates target and analysis identities", async () => {
+  const f = await fixture();
+  expect(f.selection.state).toEqual({ kind: "initial-analysis" });
+  expect(await f.owner.acquire("first")).toBeUndefined();
+  await f.owner.publish(f.packed);
+  await f.owner.close();
+  const loaded = await resolveGhidraCheckpoint(
+    f.root,
+    target,
+    profile,
+    f.resources,
+  );
+  expect(loaded.state).toEqual(f.selection.state);
+  const saved = f.owner.observation.source!;
+  const resumed = new GhidraCheckpoint(loaded, f.resources);
+  owners.push(resumed);
+  expect(await resumed.acquire("second")).toEqual({
+    path: join(loaded.directory, saved.file),
+    sha256: saved.sha256,
+  });
+  expect(
+    (
+      await resolveGhidraCheckpoint(
+        f.root,
+        "2".repeat(64),
+        profile,
+        f.resources,
+      )
+    ).key,
+  ).not.toBe(f.selection.key);
+  expect(
+    (
+      await resolveGhidraCheckpoint(
+        f.root,
+        target,
+        createAnalysisProfile(profile.provider, { import_mode: "other" }),
+        f.resources,
+      )
+    ).key,
+  ).not.toBe(f.selection.key);
+}, 120_000);
 
-it.skipIf(process.platform === "win32")(
-  "refuses a concurrent owner and admits it after the original owner closes",
-  async () => {
-    const f = await fixture();
-    await f.owner.acquire("first");
-    const other = new GhidraCheckpoint(f.selection, f.resources);
-    owners.push(other);
-    await expect(other.acquire("second")).rejects.toThrow(
-      /another REA session.*first/,
-    );
-    await f.owner.close();
-    expect(await other.acquire("second")).toBeUndefined();
-  },
-);
+it("refuses a concurrent owner and admits it after the original owner closes", async () => {
+  const f = await fixture();
+  await f.owner.acquire("first");
+  const other = new GhidraCheckpoint(f.selection, f.resources);
+  owners.push(other);
+  await expect(other.acquire("second")).rejects.toThrow(
+    /another REA session.*first/,
+  );
+  await f.owner.close();
+  expect(await other.acquire("second")).toBeUndefined();
+}, 120_000);
 
 it.skipIf(process.platform === "win32")(
   "refuses state changed after profile resolution without replacing the current manifest",

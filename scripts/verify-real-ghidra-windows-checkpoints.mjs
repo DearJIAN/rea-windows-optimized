@@ -10,8 +10,9 @@
 //     --checkpoint <dir>    checkpoint root (default: %TEMP%\rea-windows-checkpoints)
 //     --report <dir>        report directory (default: reports/windows-checkpoints)
 //     --scenarios a,b,c     subset of cold,restart,switch,same-sha,mutation,
-//                           profile,corruption,concurrent,crash,mcp
-//     --skip-cold-baseline  reuse the stored cold fingerprint from a prior run
+//                           corruption,concurrent,crash,mcp
+//     --probe <address>     function address in --binary (repeat for two probes)
+//     --probe-b <address>   function address in --binary-b
 import { execFileSync, spawn } from "node:child_process";
 import {
   copyFile,
@@ -25,6 +26,7 @@ import {
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { VerifierFixture } from "./lib/verifier-fixture.mjs";
 
 const REPO = resolve(import.meta.dirname, "..");
 const CLI = join(REPO, "scripts", "rea.mjs");
@@ -32,13 +34,33 @@ const GHIDRA_HOME = process.env.GHIDRA_INSTALL_DIR;
 const JAVA_HOME = process.env.JAVA_HOME;
 
 const argv = process.argv.slice(2);
+const valueFlags = new Set([
+  "--binary",
+  "--binary-b",
+  "--checkpoint",
+  "--report",
+  "--scenarios",
+  "--probe",
+  "--probe-b",
+]);
+for (let index = 0; index < argv.length; index++) {
+  const arg = argv[index];
+  if (arg === "--without-checkpoint") continue;
+  if (
+    !valueFlags.has(arg) ||
+    !argv[index + 1] ||
+    argv[index + 1].startsWith("--")
+  )
+    throw new Error(`Unknown option or missing value: ${arg}`);
+  index++;
+}
 const flag = (name, fallback) => {
   const index = argv.indexOf(`--${name}`);
   return index === -1 ? fallback : argv[index + 1];
 };
 const BINARY = flag("binary");
 const BINARY_B = flag("binary-b");
-const CHECKPOINT_ROOT = resolve(
+let CHECKPOINT_ROOT = resolve(
   flag("checkpoint", join(tmpdir(), "rea-windows-checkpoints")),
 );
 const REPORT = resolve(
@@ -85,8 +107,36 @@ const normalize = (text) => {
   return createHash("sha256").update(payload).digest("hex");
 };
 
-const PROBE_ADDRESSES = ["0x10041eb0", "0x1004fa00"];
-const PROBE_FUNCTIONS = ["0x10041eb0", "0x1004fa00"];
+const probes = argv.flatMap((arg, index) =>
+  arg === "--probe" ? [argv[index + 1]] : [],
+);
+const PROBE_FUNCTIONS = probes.length ? probes : ["0x10041eb0", "0x1004fa00"];
+const PROBE_ADDRESSES = PROBE_FUNCTIONS;
+const PROBE_B = flag("probe-b", "0x10001000");
+const validScenarios = new Set([
+  "cold",
+  "restart",
+  "switch",
+  "same-sha",
+  "mutation",
+  "corruption",
+  "concurrent",
+  "crash",
+  "mcp",
+]);
+if ([...SCENARIOS].some((item) => !validScenarios.has(item)))
+  throw new Error("Unknown or unsupported scenario");
+if (
+  PROBE_FUNCTIONS.some((value) => !/^0x[0-9a-f]+$/i.test(value)) ||
+  !/^0x[0-9a-f]+$/i.test(PROBE_B)
+)
+  throw new Error("Probe addresses must be hexadecimal (e.g. 0x10001000)");
+if (SCENARIOS.has("switch") && !BINARY_B)
+  throw new Error("switch requires --binary-b and its --probe-b");
+if (WITHOUT_CHECKPOINT)
+  throw new Error(
+    "--without-checkpoint is not supported by this checkpoint acceptance harness",
+  );
 
 class Session {
   #child;
@@ -115,6 +165,12 @@ class Session {
         ...extraEnv,
       },
     });
+    this.#child.on("error", (error) => this.#failPending(error));
+    this.#child.on("exit", (code, signal) =>
+      this.#failPending(
+        new Error(`MCP process exited (code ${code}, signal ${signal})`),
+      ),
+    );
     this.#child.stderr.on("data", (chunk) =>
       this.#stderr.push(chunk.toString("utf8")),
     );
@@ -134,7 +190,7 @@ class Session {
         const settle = this.#pending.get(message.id);
         if (!settle) continue;
         this.#pending.delete(message.id);
-        settle(message);
+        settle.settle(message);
       }
     });
     await this.request("initialize", {
@@ -145,6 +201,11 @@ class Session {
     this.notify("notifications/initialized", {});
   }
 
+  #failPending(error) {
+    for (const pending of this.#pending.values()) pending.reject(error);
+    this.#pending.clear();
+  }
+
   request(method, params, timeoutMs = 900_000) {
     const id = this.#nextId++;
     return new Promise((resolvePromise, reject) => {
@@ -152,11 +213,17 @@ class Session {
         this.#pending.delete(id);
         reject(new Error(`timeout: ${method}`));
       }, timeoutMs);
-      this.#pending.set(id, (message) => {
-        clearTimeout(timer);
-        if (message.error)
-          reject(new Error(JSON.stringify(message.error).slice(0, 400)));
-        else resolvePromise(message.result);
+      this.#pending.set(id, {
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+        settle: (message) => {
+          clearTimeout(timer);
+          if (message.error)
+            reject(new Error(JSON.stringify(message.error).slice(0, 400)));
+          else resolvePromise(message.result);
+        },
       });
       this.#child.stdin.write(
         `${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`,
@@ -404,9 +471,10 @@ const runSwitch = async (results) => {
       "switch_pseudo_b",
       "procedure_pseudo_code",
       {
-        procedure: "0x10001000",
+        procedure: PROBE_B,
       },
     );
+    requireOk(bProbe, "switch pseudo B");
     const aOpened = await openBinary(session, "switch_open_a", BINARY);
     const aProbe = await session.call(
       "switch_pseudo_a",
@@ -473,6 +541,8 @@ const runMutation = async (results) => {
     requireOk(probe, "mutation pseudo");
     const mutatedSha = await sha256File(mutated);
     const keys = await listCache();
+    if (!keys.some((entry) => entry.target_sha256 === mutatedSha))
+      throw new Error("mutated target did not publish its own checkpoint");
     results.mutation = {
       totalMs: opened.ms + probe.ms,
       cacheBefore: before.length,
@@ -505,6 +575,13 @@ const runCorruption = async (results) => {
       "procedure_pseudo_code",
       { procedure: PROBE_FUNCTIONS[0] },
     );
+    requireOk(probe, "corruption recovery");
+    if (
+      !(await readdir(join(CHECKPOINT_ROOT, entry.key))).some((name) =>
+        name.startsWith("current.invalid-"),
+      )
+    )
+      throw new Error("damaged checkpoint was not quarantined");
     results.corruption = {
       totalMs: opened.ms + probe.ms,
       recovered: !probe.isError,
@@ -545,6 +622,19 @@ const runConcurrent = async (results) => {
         procedure: PROBE_FUNCTIONS[0],
       }),
     ]);
+    requireOk(a, "concurrent open A");
+    requireOk(b, "concurrent open B");
+    if (aAnalysis.isError === bAnalysis.isError)
+      throw new Error("expected exactly one checkpoint lease owner");
+    const refused = aAnalysis.isError ? aAnalysis : bAnalysis;
+    if (
+      !/another REA session owns this checkpoint/i.test(
+        refused.error ?? refused.text,
+      )
+    )
+      throw new Error(
+        "competing session did not report checkpoint lease contention",
+      );
     results.concurrent = {
       firstMs: a.ms + aAnalysis.ms,
       firstError: aAnalysis.isError,
@@ -567,18 +657,18 @@ const runCrash = async (results) => {
   if (!SCENARIOS.has("crash")) return;
   const session = new Session("crash");
   await session.start();
-  const opened = session.call("crash_open", "open_binary", {
-    path: BINARY,
-    provider_id: "ghidra",
-  });
+  await openBinary(session, "crash_open", BINARY);
   const analysed = session.call("crash_analyse", "procedure_pseudo_code", {
     procedure: PROBE_FUNCTIONS[0],
   });
   // Kill mid-analysis/warm-up, then prove a later owner is not blocked.
   await new Promise((resolvePromise) => setTimeout(resolvePromise, 3_000));
   await session.kill();
-  opened.catch(() => {});
-  analysed.catch(() => {});
+  const interrupted = await analysed;
+  if (!interrupted.isError)
+    throw new Error(
+      "analysis completed before the crash; crash recovery was not exercised",
+    );
   const recovery = new Session("crash-recovery");
   await recovery.start();
   try {
@@ -591,6 +681,8 @@ const runCrash = async (results) => {
       "procedure_pseudo_code",
       { procedure: PROBE_FUNCTIONS[0] },
     );
+    requireOk(record, "crash recovery open");
+    requireOk(probe, "crash recovery pseudo");
     results.crash = {
       recoveryMs: record.ms + probe.ms,
       recovered: !probe.isError,
@@ -610,6 +702,8 @@ const runMcp = async (results) => {
   try {
     const tools = await session.request("tools/list", {});
     const prompts = await session.request("prompts/list", {});
+    if (!(tools.tools ?? []).some((tool) => tool.name === "open_binary"))
+      throw new Error("MCP catalog lacks open_binary");
     results.mcp = {
       tools: (tools.tools ?? []).length,
       prompts: (prompts.prompts ?? []).length,
@@ -659,9 +753,16 @@ const main = async () => {
   const size = (await stat(BINARY)).size;
   console.log(`target ${BINARY} sha256=${targetSha} bytes=${size}`);
   console.log(`checkpoint root ${CHECKPOINT_ROOT}`);
-  const existing = await ensureCheckpointRoot();
-  if (existing > 0 && (SCENARIOS.has("cold") || SCENARIOS.has("restart")))
-    console.log(`checkpoint root already holds ${existing} entries`);
+  await ensureCheckpointRoot();
+  if (SCENARIOS.has("cold")) {
+    CHECKPOINT_ROOT = (
+      await VerifierFixture.keepArtifacts({
+        parent: CHECKPOINT_ROOT,
+        prefix: "acceptance-",
+      })
+    ).path;
+    console.log(`isolated cold checkpoint root ${CHECKPOINT_ROOT}`);
+  }
 
   const results = {
     startedAt,
@@ -687,6 +788,12 @@ const main = async () => {
     ),
   };
 
+  if (
+    SCENARIOS.has("cold") &&
+    SCENARIOS.has("restart") &&
+    !results.equivalence.coldVsRestart.equal
+  )
+    throw new Error("cold and restored fingerprints differ");
   results.finishedAt = new Date().toISOString();
   await mkdir(REPORT, { recursive: true });
   const reportPath = join(REPORT, `verify-${Date.now()}.json`);
