@@ -31,11 +31,21 @@ Checkpoint（检查点）是 REA 保存的、已经完成 Ghidra 自动分析的
 
 下面以 **Windows x64 和 Codex** 为例，从本仓库源码构建并接入；Trae 等其他 MCP 客户端也可指向同一份构建产物。仓库公开前，克隆需要有仓库访问权限。不要用 `npm install -g rea-agents` 代替下面的构建步骤：该命令安装 npm 上的包，不保证包含本仓库的优化。
 
+> **路径示例，请先替换再执行：**下面的 `D:\TOOLS\...`、`C:\msys64\...` 和 Node.js 路径是作者环境的示例；`D:\rea-checkpoints` 是演示用缓存目录，并非必须使用的路径。它们不会自动适配你的电脑。请先确认自己的安装位置和可用目录，再同时修改构建命令与 Codex 配置中的对应路径；不要在已有重要数据的目录上盲目操作。
+
+### 让 AI 协助搭建（可复制）
+
+在能够访问你本机文件和终端的 AI 客户端中，复制下面的提示词。路径由 AI 按当前机器检查，示例不应原样套用：
+
+```text
+请阅读 https://github.com/DearJIAN/rea-windows-optimized 的 README 和 Windows 构建说明，帮我在本机搭建这个优化版并接入 Codex，启用 Checkpoint 和 auto 模式。先检查操作系统、现有 Git、Node.js、Ghidra、JDK、MSYS2 工具链、仓库位置和 Codex 配置，使用本机真实路径；不要照搬作者示例路径。保留现有 REA、配置和缓存，修改配置前先备份；不要自行安装或升级无关软件，也不要自动安装 Ghidra 或 JDK。按项目的权限要求执行，缺少必须的信息或依赖时说明并向我确认。完成后验证配置和实际连接；若能用我提供的样本测试 Checkpoint，就报告恢复证据与耗时，否则明确说明未验证的部分。
+```
+
 ### 1. 准备并构建
 
 自行准备 Git、Node.js 24.22.1（见 [.nvmrc](.nvmrc)）、JDK 21、Ghidra 12.x，以及用于构建 Windows 原生组件的 MSYS2 UCRT64 MinGW 工具链。Ghidra 和 JDK 不由 REA 自动安装；具体要求见 [Windows 构建说明](docs/windows/checkpoints.md#build)。
 
-在 PowerShell 中执行（将目录改成自己的位置）：
+下面是**作者环境的 PowerShell 示例**。其中仓库位置 `D:\TOOLS\rea-windows-optimized` 和 MSYS2 工具链位置 `C:\msys64\ucrt64\bin` 必须先核实并按自己的机器替换；克隆目标应是可用的新目录。确认目标目录和所需工具后再执行：
 
 ```powershell
 git clone https://github.com/DearJIAN/rea-windows-optimized.git D:\TOOLS\rea-windows-optimized
@@ -54,7 +64,9 @@ node scripts/rea.mjs --version
 
 ### 2. 接入 Codex 并启用 Checkpoint
 
-在 Codex 配置文件 `%USERPROFILE%\.codex\config.toml` 中添加以下配置。将所有路径换成本机真实的绝对路径；其中 `cwd` 和 `args` 指向**第 1 步的优化版仓库**，`command` 指向本机 Node.js。Checkpoint 选择当前用户专用的本地目录，不要使用公共临时目录。
+Codex 默认的用户配置文件是 `%USERPROFILE%\.codex\config.toml`；PowerShell 中可用 `Join-Path $env:USERPROFILE '.codex\config.toml'` 查看该路径。如果你为 Codex 指定了其他配置目录，请以实际配置为准。修改前先备份文件，保留原有配置和其他 MCP 服务；如果已有同名 `[mcp_servers.rea-windows-optimized]`，不要重复添加同名表，应检查并修改现有条目或选择不同的服务名。
+
+下面的 TOML 是**作者机器的接入示例，不是可直接套用到所有电脑的配置**。把每个路径换为自己的实际绝对路径，特别是 `args` 和 `cwd` 必须与第 1 步构建的仓库位置一致，且 `cwd` 目录必须存在：
 
 ```toml
 [mcp_servers.rea-windows-optimized]
@@ -71,11 +83,24 @@ REA_GHIDRA_CHECKPOINT_DIR = 'D:\rea-checkpoints'
 REA_GHIDRA_RETAINED_TARGETS = 'auto'
 ```
 
-此示例显式启用 `auto`；如果删除该行且启动环境也没有设置这一变量，项目默认容量为 2。修改前先备份配置；如果已有 REA 配置，可先保留并用上面的独立名称测试。完成后重启或重新连接 Codex，使新的 MCP 配置生效。其他客户端的配置方式见 [MCP 客户端配置](docs/getting-started/client-configuration.md)和 [Trae 配置示例](docs/windows/checkpoints.md#connecting-trae-cn-manual-opt-in)。不同 REA 进程不能同时持有同一目标的 Checkpoint 租约，因此测试另一服务前先关闭正在使用该目标的会话。
+| 配置项                                     | 需要填写什么                                                                                            |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
+| `command`                                  | 本机 `node.exe` 的完整路径；PowerShell 可用 `(Get-Command node -CommandType Application).Source` 查看。 |
+| `args`                                     | 自己第 1 步仓库中的 `scripts\rea.mjs` 完整路径，以及启动参数 `mcp`。                                    |
+| `cwd`                                      | 自己第 1 步的仓库目录；必须存在，并保留构建产物。                                                       |
+| `startup_timeout_sec` / `tool_timeout_sec` | Codex 等待服务启动及单次工具调用的超时秒数；`120` 和 `450` 是示例值。                                   |
+| `GHIDRA_INSTALL_DIR`                       | 本机 Ghidra 安装根目录，不是其 `support` 子目录。                                                       |
+| `REA_GHIDRA_JAVA_HOME`                     | 本机 Ghidra 使用的 JDK 根目录，示例中的版本目录名不一定与你相同。                                       |
+| `REA_GHIDRA_CHECKPOINT_DIR`                | 当前用户专用的本地缓存目录；`D:\rea-checkpoints` 只是演示，不要选公共临时目录。                         |
+| `REA_GHIDRA_RETAINED_TARGETS`              | `auto` 启用自动模式；也可选择固定容量 `2`～`5`。                                                        |
+
+此示例显式启用 `auto`；如果删除该行且启动环境也没有设置这一变量，项目默认容量为 2。保存后重启或重新连接 Codex，使新配置生效。如果安装了 Codex CLI，可运行 `codex mcp list` 检查是否列出了 `rea-windows-optimized`；**列表中出现服务不等于连接和分析已成功**，还需要执行下方第 3 步。Codex 配置格式另见 [OpenAI 官方 MCP 文档](https://developers.openai.com/codex/mcp/)；其他客户端的配置方式见 [MCP 客户端配置](docs/getting-started/client-configuration.md)和 [Trae 配置示例](docs/windows/checkpoints.md#connecting-trae-cn-manual-opt-in)。不同 REA 进程不能同时持有同一目标的 Checkpoint 租约，因此测试另一服务前先关闭正在使用该目标的会话。
 
 ### 3. 分析并确认优化生效
 
 在 Codex 中请它使用 `rea-windows-optimized` 服务和 Ghidra 打开自己的 DLL、对指定函数反编译，完成后关闭分析会话。第一次分析新文件仍需完整分析；正常关闭后，再打开同一文件并反编译。检查返回的 Evidence：恢复成功时会说明已恢复保存的 Program，且没有重新运行自动分析。若未看到该证据，不要仅凭耗时判断恢复成功。
+
+如果服务没有出现在 Codex 中、无法连接，或没有可用样本，应分别报告该状态；单独在终端启动 REA 成功不代表 Codex 内的连接已经验证成功。
 
 在同一 REA 会话内分析已处理的 A、B 后切回 A，可以体验符合条件的会话复用；它与重启后的磁盘 Checkpoint 恢复是两个不同场景。测试完成后关闭分析会话。恢复依赖目标内容和分析配置匹配，其他限制和排错方法见 [Windows Checkpoint 说明](docs/windows/checkpoints.md)。
 
@@ -104,6 +129,21 @@ REA_GHIDRA_RETAINED_TARGETS = 'auto'
 | REA 重启后恢复已分析目标                               | 原始测试约 66 秒 | 约 13–34 秒 | 不同测试负载下的记录，并非严格同条件对照；恢复仍需启动 Ghidra。                  |
 
 上述切换时间针对**已经分析过的目标**。新文件第一次仍需完整分析并生成 Checkpoint；首次分析不保证加速。对照测量覆盖选定查询及分析指纹，不代表所有文件、机器和工作负载都会得到相同结果。实测条件、样本、CPU 与内存的测量口径见[性能记录](docs/windows/checkpoints.md#retained-session-comparison-2026-11-18)。
+
+### 多个 DLL 切换与内存实测
+
+2026-11-18 在同一台 Windows 11 x64 机器上使用真实 Ghidra 测试，样本为两个作者的 DLL 和三个 Windows 系统 DLL 副本；各目标已有隔离的 Checkpoint，表中时间为**第二轮**每个目标的打开与反编译耗时之和。固定容量的含义是同时可保留的目标总数，包括当前目标。
+
+| 固定容量 | 测试目标数 | 第二轮切换＋反编译合计 | 采样最大私有提交内存 |
+| -------- | ---------: | ---------------------: | -------------------: |
+| 默认 2   |          5 |             104.709 秒 |            1,452 MiB |
+| 3        |          3 |               0.556 秒 |            1,840 MiB |
+| 4        |          4 |               0.753 秒 |            2,192 MiB |
+| 5        |          5 |               1.096 秒 |            2,620 MiB |
+
+容量 2 与容量 5 使用**相同的五个目标和两轮任务**，可作这一次的对照；容量 3、4 的目标数量不同，不能直接与五目标任务比较。两次五目标对照的完整场景分别为 196.074 秒和 97.843 秒，包含启动、两轮调用、采样等待及关闭；第二轮结果与完整场景不是同一个计时范围。所有结果是单次热缓存测试，内存为进程家族的采样私有提交，不等于实际物理驻留，短时峰值可能漏采。选定函数的结果摘要一致，不代表所有函数均已验证。样本、CPU 及更详细限制见[多目标实测记录](DearJIAN-docs/multi-target-pool-results.md)。
+
+`auto` 是按内存和闲置时间管理会话，不等于固定容量 5；六目标自动模式的验证也记录在[同一份笔记](DearJIAN-docs/multi-target-pool-results.md#自动模式的六目标验证后续工作区修改)中。
 
 ### Codex 全局安装验证
 
