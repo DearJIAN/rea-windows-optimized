@@ -36,7 +36,9 @@ def is_language_code(value):
 def readme_edition_paths(root):
     """Return repo-relative README editions: root English plus docs/readme translations."""
     editions = set()
-    if (root / "README.md").is_file():
+    if (root / "README.original.md").is_file():
+        editions.add("README.original.md")
+    elif (root / "README.md").is_file():
         editions.add("README.md")
     folder = root / "docs" / "readme"
     if folder.is_dir():

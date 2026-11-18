@@ -22,6 +22,7 @@ const isLanguageNavigation = (target) => {
   const path = target.split(/[#?]/u)[0];
   return (
     path === "README.md" ||
+    path === "README.original.md" ||
     /^docs\/readme\/README_[A-Za-z0-9-]+\.md$/u.test(path)
   );
 };
@@ -180,6 +181,7 @@ export const documentationFactIssues = async (root, catalog) => {
   }
   const readmePaths = [
     "README.md",
+    "README.original.md",
     ...translatedNames
       .filter((name) => /^README_[A-Za-z0-9-]+\.md$/u.test(name))
       .map((name) => `docs/readme/${name}`),
@@ -212,8 +214,8 @@ export const documentationFactIssues = async (root, catalog) => {
   }
   const canonicalLinks = readmeLinkTargets(
     root,
-    "README.md",
-    readmes.get("README.md") ?? "",
+    "README.original.md",
+    readmes.get("README.original.md") ?? "",
   );
   const languageInventory = JSON.parse(
     await readFile(join(root, "website/locales/languages.json"), "utf8"),
@@ -221,7 +223,9 @@ export const documentationFactIssues = async (root, catalog) => {
   const readmeLanguages = new Map(
     languageInventory.map(({ readme, code }) => [readme, code]),
   );
-  for (const path of readmePaths.filter((path) => path !== "README.md"))
+  for (const path of readmePaths.filter(
+    (path) => path !== "README.md" && path !== "README.original.md",
+  ))
     if (
       JSON.stringify(
         readmeLinkTargets(
@@ -232,7 +236,9 @@ export const documentationFactIssues = async (root, catalog) => {
         ),
       ) !== JSON.stringify(canonicalLinks)
     )
-      issues.push(`${path}: documentation links differ from README.md`);
+      issues.push(
+        `${path}: documentation links differ from README.original.md`,
+      );
 
   const installationPath = "docs/getting-started/installation.md";
   const installation = await readFile(join(root, installationPath), "utf8");
