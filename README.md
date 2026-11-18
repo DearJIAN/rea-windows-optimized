@@ -155,7 +155,7 @@ REA_GHIDRA_RETAINED_TARGETS = 'auto'
 
 容量 2 与容量 5 使用**相同的五个目标和两轮任务**，可作这一次的对照；容量 3、4 的目标数量不同，不能直接与五目标任务比较。两次五目标对照的完整场景分别为 196.074 秒和 97.843 秒，包含启动、两轮调用、采样等待及关闭；第二轮结果与完整场景不是同一个计时范围。所有结果是单次热缓存测试，内存为进程家族的采样私有提交，不等于实际物理驻留，短时峰值可能漏采。选定函数的结果摘要一致，不代表所有函数均已验证。样本、CPU 及更详细限制见[多目标实测记录](DearJIAN-docs/multi-target-pool-results.md)。
 
-`auto` 是按内存和闲置时间管理会话，不等于固定容量 5；六目标自动模式的验证也记录在[同一份笔记](DearJIAN-docs/multi-target-pool-results.md#自动模式的六目标验证后续工作区修改)中。
+`auto` 是按内存和闲置时间管理会话，不等于固定容量 5；[六目标自动模式测试](DearJIAN-docs/multi-target-pool-results.md#自动模式的六目标验证后续工作区修改)和 [Codex 客户端三目标隔离验证](DearJIAN-docs/multi-target-pool-results.md#codex-客户端隔离验证2026-11-18)的过程及限制见实测记录。
 
 ### Codex 全局安装验证
 
