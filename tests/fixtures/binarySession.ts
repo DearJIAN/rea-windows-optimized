@@ -29,7 +29,8 @@ import { observed } from "./analysisExecution.js";
 import { createTestTempDirectory } from "./temporaryDirectory.js";
 
 type TestBinarySessionOptions = {
-  readonly retainedTargetLimit?: 2 | 3 | 4 | 5;
+  readonly retainedTargetLimit?: import("../../src/domain/retainedTargets.js").RetainedTargetLimit;
+  readonly retainedTargetPolicy?: import("../../src/application/binary/BinarySession.js").RetainedTargetPolicy;
   readonly auxiliaryProviders?: readonly AnalysisProvider[];
   readonly resolveAnalysisProfile?: (
     target: BinaryTarget,
@@ -126,6 +127,7 @@ export const createTestBinarySession = (
     undefined,
     undefined,
     options.retainedTargetLimit,
+    options.retainedTargetPolicy,
   );
 
 /** Materialize two distinct targets for session lifecycle tests. */

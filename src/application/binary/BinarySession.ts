@@ -57,6 +57,7 @@ import {
   routeProviderIdentity,
 } from "./SessionProviderPolicy.js";
 import { InvestigationRecords } from "../investigation/InvestigationRecords.js";
+import type { RetainedTargetLimit } from "../../domain/retainedTargets.js";
 import { recordEvidenceSources } from "../investigation/recordEvidenceSources.js";
 import { recoverProviderSourceFailure } from "../investigation/sourcePublicationRecovery.js";
 import { BinarySessionRecords } from "./BinarySessionRecords.js";
@@ -183,6 +184,13 @@ const unrecordedExecution = (
  * active provider client. A failed switch recreates the previous target instead
  * of retaining a client whose resources were already shut down.
  */
+/** Host observations and timer are supplied at composition, not read by the session. */
+export interface RetainedTargetPolicy {
+  readonly now: () => number;
+  readonly pressure: () => "high" | "normal" | "unknown";
+  readonly schedule: (callback: () => void) => () => void;
+}
+
 export class BinarySession
   extends BinarySessionRecords
   implements BinarySessionPort
@@ -190,6 +198,8 @@ export class BinarySession
   #active: SessionBinding | undefined;
   /** Oldest first; active plus parked never exceed the configured limit. */
   #parked: SessionBinding[] = [];
+  readonly #parkedAt = new WeakMap<SessionBinding, number>();
+  #cancelRetentionTimer: (() => void) | undefined;
   #externalMutationCleanupFailure: AnalysisError | undefined;
   #lastCloseCleanupFailure: AnalysisError | undefined;
   #pendingCleanup:
@@ -218,7 +228,8 @@ export class BinarySession
     providerRouter: SessionProviderRouter,
     records: InvestigationRecords = new InvestigationRecords(),
     bundleResourceFactory?: BundleResourceClientFactory,
-    readonly retainedTargetLimit: 2 | 3 | 4 | 5 = 2,
+    readonly retainedTargetLimit: RetainedTargetLimit = 2,
+    readonly retainedTargetPolicy?: RetainedTargetPolicy,
   ) {
     super(records);
     this.#providerRouter = providerRouter;
@@ -611,6 +622,7 @@ export class BinarySession
     const previous = this.#active;
     const canRetainPrevious = () =>
       !sameTarget &&
+      this.#retainedCapacity() > 1 &&
       previous !== undefined &&
       previous.route.binding?.retainOnTargetSwitch === true &&
       previous.client.canRetainOnTargetSwitch?.() === true &&
@@ -636,8 +648,8 @@ export class BinarySession
       if (isAborted(options.signal))
         return err(cancelledBy("open_binary", options.signal));
       if (live) {
-        this.#parked.splice(parkedIndex, 1);
-        this.#parked.push(previous);
+        this.#removeParked(parkedIndex);
+        this.#park(previous);
         this.#active = {
           ...parked,
           target,
@@ -662,11 +674,11 @@ export class BinarySession
       if (
         canRetainPrevious() &&
         conflict === -1 &&
-        this.#parked.length < this.retainedTargetLimit - 1
+        this.#parked.length < this.#retainedCapacity() - 1
       )
         break;
       const index = conflict === -1 ? 0 : conflict;
-      const [retired] = this.#parked.splice(index, 1);
+      const retired = this.#removeParked(index);
       if (retired === undefined) break;
       const closed = await this.#retireClient(retired);
       if (!closed.ok)
@@ -701,7 +713,7 @@ export class BinarySession
     }
     this.#active = undefined;
     if (canRetainPrevious() && previous !== undefined) {
-      this.#parked.push(previous);
+      this.#park(previous);
     } else if (previous !== undefined) {
       const closed = await this.#retireClient(previous);
       if (!closed.ok) {
@@ -952,6 +964,8 @@ export class BinarySession
    */
   beginShutdown(): void {
     this.#shutdownStarted = true;
+    this.#cancelRetentionTimer?.();
+    this.#cancelRetentionTimer = undefined;
   }
 
   #targetAcquisitionRefused(
@@ -1066,7 +1080,7 @@ export class BinarySession
       const pending = await this.#retryPendingCleanup();
       if (!pending.ok) return pending;
       while (this.#parked.length > 0) {
-        const parked = this.#parked.shift();
+        const parked = this.#removeParked(0);
         if (parked === undefined) break;
         const closed = await this.#retireClient(parked);
         if (!closed.ok)
@@ -1218,7 +1232,7 @@ export class BinarySession
     // before retiring the standby, whose ownership stays in #parked.
     let parkedClosed: Result<null, AnalysisError> = ok(null);
     while (closed.ok && parkedClosed.ok && this.#parked.length > 0) {
-      const parked = this.#parked.shift();
+      const parked = this.#removeParked(0);
       if (parked === undefined) break;
       parkedClosed = await this.#retireClient(parked, {
         ...(options.progress === undefined
@@ -1781,6 +1795,72 @@ export class BinarySession
     }
   }
 
+  /** Unknown memory observations conservatively retain the original two-target bound. */
+  #retainedCapacity(): number {
+    if (this.retainedTargetLimit !== "auto") return this.retainedTargetLimit;
+    const pressure = this.retainedTargetPolicy?.pressure() ?? "unknown";
+    return pressure === "normal" ? Infinity : pressure === "high" ? 1 : 2;
+  }
+
+  #park(binding: SessionBinding): void {
+    this.#parked.push(binding);
+    if (this.retainedTargetPolicy !== undefined)
+      this.#parkedAt.set(binding, this.retainedTargetPolicy.now());
+    this.#syncRetentionTimer();
+  }
+
+  #removeParked(index: number): SessionBinding | undefined {
+    const [binding] = this.#parked.splice(index, 1);
+    this.#syncRetentionTimer();
+    return binding;
+  }
+
+  #syncRetentionTimer(): void {
+    if (this.#parked.length === 0 || this.#shutdownStarted) {
+      this.#cancelRetentionTimer?.();
+      this.#cancelRetentionTimer = undefined;
+      return;
+    }
+    if (
+      this.retainedTargetLimit !== "auto" ||
+      this.#cancelRetentionTimer !== undefined
+    )
+      return;
+    const policy = this.retainedTargetPolicy;
+    if (policy === undefined) return;
+    this.#cancelRetentionTimer = policy.schedule(() => {
+      // Never interrupt a request or queue multiple maintenance transitions.
+      if (
+        this.#shutdownStarted ||
+        this.#transitionPending > 0 ||
+        this.#calls.size > 0 ||
+        this.#pendingCleanup !== undefined
+      )
+        return;
+      void this.#serialize(
+        async (admittedThrough) => {
+          await this.#drainCalls(admittedThrough);
+          if (this.#shutdownStarted || this.#pendingCleanup !== undefined)
+            return;
+          while (this.#parked.length > 0) {
+            const oldest = this.#parked[0];
+            if (oldest === undefined) break;
+            const since = this.#parkedAt.get(oldest);
+            const expired =
+              since !== undefined && policy.now() - since >= 30 * 60_000;
+            if (!expired && policy.pressure() !== "high") break;
+            const retired = this.#removeParked(0);
+            if (retired === undefined) break;
+            // A failed close stays owned by #pendingCleanup for the next explicit retry.
+            const closed = await this.#retireClient(retired);
+            if (!closed.ok) break;
+          }
+        },
+        { abortPrompts: false },
+      ).catch(() => undefined);
+    });
+  }
+
   #currentRoute(): SessionProviderRoute {
     return this.#active?.route ?? this.#providerRouter.initialRoute();
   }
@@ -1854,7 +1934,7 @@ export class BinarySession
     const parkedIndex = this.#parked.indexOf(previous);
     if (parkedIndex !== -1) {
       const live = await this.#retainedClientLive(previous.client, {});
-      this.#parked.splice(parkedIndex, 1);
+      this.#removeParked(parkedIndex);
       if (live) {
         this.#active = previous;
         this.#clearRuntimeAvailability();

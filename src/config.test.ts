@@ -13,6 +13,20 @@ import {
   parseJebMcpTimeoutMs,
 } from "./config/environment.js";
 import { projectAnalysisError } from "./domain/analysisErrorProjection.js";
+import { physicalMemoryPressure } from "./domain/retainedTargets.js";
+
+it("uses ninety percent of total physical memory as the pressure boundary", () => {
+  expect(physicalMemoryPressure(1000, 101)).toBe("normal");
+  expect(physicalMemoryPressure(1000, 100)).toBe("high");
+  expect(physicalMemoryPressure(1000, 0)).toBe("high");
+  for (const [total, free] of [
+    [0, 0],
+    [100, -1],
+    [100, 101],
+    [NaN, 1],
+  ])
+    expect(physicalMemoryPressure(total!, free!)).toBe("unknown");
+});
 
 it("still rejects a NUL in an unresolved expression", () => {
   const result = parseEnvironmentValues(
@@ -92,6 +106,8 @@ it("accepts only supported retained target capacities", () => {
     expect(parseConfig({ REA_GHIDRA_RETAINED_TARGETS: value }).ok).toBe(false);
   const defaults = parseConfig({});
   expect(defaults.ok && defaults.value.ghidraRetainedTargets).toBeUndefined();
+  const automatic = parseConfig({ REA_GHIDRA_RETAINED_TARGETS: "auto" });
+  expect(automatic.ok && automatic.value.ghidraRetainedTargets).toBe("auto");
 });
 
 it.skipIf(process.platform !== "win32")(

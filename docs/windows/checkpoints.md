@@ -92,7 +92,8 @@ it does not establish exactly which Ghidra startup stage had been reached.
 On Windows, a stock read-only Ghidra checkpoint session keeps up to two loaded
 targets by default, including the active target. Set the MCP server or CLI
 environment variable `REA_GHIDRA_RETAINED_TARGETS` to `3`, `4`, or `5` to
-increase this capacity; `2` explicitly selects the default. Other values are
+increase this capacity; `2` explicitly selects the default. Set it to `auto`
+for adaptive retention without a fixed target-count limit. Other values are
 configuration errors. Restart the REA process after changing its environment.
 No Ghidra process is preloaded: eligible targets enter the pool on use. Returning to the same target path,
 bytes and analysis profile reuses its live client after a health check; other
@@ -109,11 +110,20 @@ session has instantiated another provider, the switch closes that composite
 instead of retaining its other provider's resources.
 
 A standby keeps its Ghidra process, memory, private files and checkpoint lease
-until eviction or close. The configured limit is per REA session; it is a
-process-count bound, not a hard memory limit or automatic memory-pressure guard.
-A competing REA process
-cannot acquire a checkpoint while either of these clients owns its lease. Close
-the binary session to release both. The target executable is still read-only.
+until eviction or close. A numeric limit is per REA session; it bounds client
+count, not memory. In `auto` mode, Windows physical
+memory is sampled at target switches and, while standby clients exist, every
+30 seconds. At 90% system physical-memory use, REA retires least-recently-used
+standbys; standbys unused for 30 minutes are also retired. The active target is
+not retired by background maintenance, and maintenance waits until admitted
+calls and transitions are idle. When memory returns, targets are retained only
+as they are used again. If memory observation is unavailable, new retention
+falls back to the two-target limit rather than assuming memory is available.
+Sampling, ongoing work and cleanup take time: 90% is not a hard system limit.
+A failed background close keeps its cleanup owner and is retried on the next
+target switch or explicit close. A competing REA process cannot acquire a
+checkpoint while a client owns its lease. Close the binary session to release
+all owned clients. The target executable is still read-only.
 
 ## Measuring target switching
 

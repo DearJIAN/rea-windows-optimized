@@ -2,7 +2,7 @@
 
 这篇笔记解释本仓库相较原版 REA 所做的 Windows Ghidra 优化，以及它在什么情况下能减少等待。配置、验收细节和最新技术约束以 [Windows Checkpoint 技术文档](../docs/windows/checkpoints.md)为准；历史变更见 [Windows 变更记录](WINDOWS_CHANGELOG.md)。
 
-**后续更新：** 下文固定快照描述的是最初的双目标实现。当前代码支持配置总容量 2～5，默认 2；按需自动保留，容量满时淘汰最久未使用的备用目标。配置、资源和租约约束见 [Windows 技术文档](../docs/windows/checkpoints.md#reusing-a-loaded-target)。历史比较与文件清单仍保留其原始快照，不代表当前版本完整差异。
+**后续更新：** 下文固定快照描述的是最初的双目标实现。当前代码支持固定总容量 2～5（默认 2），也支持不设固定数量上限的 `auto` 模式：目标按需保留，内存压力或闲置时间触发后，优先释放最久未使用的备用目标。配置、资源和租约约束见 [Windows 技术文档](../docs/windows/checkpoints.md#reusing-a-loaded-target)。历史比较与文件清单仍保留其原始快照，不代表当前版本完整差异。
 
 ## 对照基线与范围
 

@@ -38,7 +38,7 @@ export interface AppConfig {
   readonly ghidraExistingProject?: GhidraProjectSelection;
   /** Opt-in storage for checkpoints of REA-owned Ghidra Programs. */
   readonly ghidraCheckpointDirectory?: string;
-  readonly ghidraRetainedTargets?: 2 | 3 | 4 | 5;
+  readonly ghidraRetainedTargets?: import("../domain/retainedTargets.js").RetainedTargetLimit;
   readonly ghidraNativeAotJar?: string;
   readonly ilspyCmdPath: string | undefined;
   /**

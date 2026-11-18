@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { waitFor } from "../../../tests/support/testWait.js";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { elf } from "../../domain/binaryTarget.fixture.js";
@@ -25,10 +26,11 @@ const identity = {
 
 async function fixture(
   sharedExclusion: boolean | ((path: string) => string) = false,
-  retainedTargetLimit: 2 | 3 | 4 | 5 = 2,
+  retainedTargetLimit: import("../../domain/retainedTargets.js").RetainedTargetLimit = 2,
+  retainedTargetPolicy?: import("./BinarySession.js").RetainedTargetPolicy,
 ) {
   const dir = await createTestTempDirectory("rea-switch-retain-");
-  const paths = ["a", "b", "c", "d", "e", "f"].map((name) =>
+  const paths = ["a", "b", "c", "d", "e", "f", "g", "h"].map((name) =>
     join(dir, `${name}.elf`),
   );
   for (const path of paths) await writeFile(path, elf(2, 1, 62));
@@ -37,6 +39,7 @@ async function fixture(
   let failClose: string | undefined;
   let failedOwner: string | undefined;
   let onClose: ((path: string) => void) | undefined;
+  let onExecute: ((operation: string) => Promise<void> | undefined) | undefined;
   let generation = 0;
   const blocked = new Set<string>();
   const failure = new ProviderCleanupError("fixture", ["client"], {
@@ -46,7 +49,10 @@ async function fixture(
     (target) => {
       created.push(target.path);
       return {
-        execute: async () => ok(createAnalysisExecution(target.path, identity)),
+        execute: async (operation) => {
+          await onExecute?.(operation);
+          return ok(createAnalysisExecution(target.path, identity));
+        },
         reuseReadiness: () => (blocked.has(target.path) ? "blocked" : "ready"),
         close: async () => {
           closed.push(target.path);
@@ -63,6 +69,7 @@ async function fixture(
     },
     {
       retainedTargetLimit,
+      ...(retainedTargetPolicy === undefined ? {} : { retainedTargetPolicy }),
       resolveAnalysisProfile: async (target) =>
         ok({
           profile: createAnalysisProfile(identity, {
@@ -90,12 +97,185 @@ async function fixture(
     onClose: (callback: (path: string) => void) => {
       onClose = callback;
     },
+    onExecute: (callback: (operation: string) => Promise<void> | undefined) => {
+      onExecute = callback;
+    },
     block: (path: string) => blocked.add(path),
     setGeneration: (value: number) => {
       generation = value;
     },
   };
 }
+
+function automaticPolicy() {
+  let currentTime = 0;
+  let memory: "normal" | "high" | "unknown" = "normal";
+  let callback: (() => void) | undefined;
+  return {
+    policy: {
+      now: () => currentTime,
+      pressure: () => memory,
+      schedule: (next: () => void) => {
+        callback = next;
+        return () => {
+          callback = undefined;
+        };
+      },
+    },
+    setTime: (value: number) => {
+      currentTime = value;
+    },
+    setPressure: (value: typeof memory) => {
+      memory = value;
+    },
+    tick: () => callback?.(),
+    scheduled: () => callback !== undefined,
+  };
+}
+
+it("automatically keeps more than five targets until host pressure requires eviction", async () => {
+  const memory = automaticPolicy();
+  const f = await fixture(false, "auto", memory.policy);
+  const selected = f.paths.slice(0, 7);
+  try {
+    for (const path of selected) {
+      expect((await f.session.open(path)).ok).toBe(true);
+      expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    }
+    expect(f.created).toEqual(selected);
+    expect(f.closed).toEqual([]);
+    expect(memory.scheduled()).toBe(true);
+    memory.setPressure("high");
+    memory.tick();
+    await waitFor(() => expect(f.closed).toEqual(selected.slice(0, 6)));
+    expect(f.session.activeTarget()?.path).toBe(selected[6]);
+    expect(memory.scheduled()).toBe(false);
+    memory.setPressure("normal");
+    expect((await f.session.open(selected[0]!)).ok).toBe(true);
+    expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    expect(f.created).toEqual([...selected, selected[0]]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+it("retires only background targets idle for 30 minutes", async () => {
+  const memory = automaticPolicy();
+  const f = await fixture(false, "auto", memory.policy);
+  const [a, b, c] = f.paths as [string, string, string];
+  try {
+    expect((await f.session.open(a)).ok).toBe(true);
+    expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    expect((await f.session.open(b)).ok).toBe(true);
+    expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    memory.setTime(1000);
+    expect((await f.session.open(c)).ok).toBe(true);
+    expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    memory.setTime(30 * 60_000);
+    memory.tick();
+    await waitFor(() => expect(f.closed).toEqual([a]));
+    expect(f.session.activeTarget()?.path).toBe(c);
+    expect((await f.session.open(b)).ok).toBe(true);
+    expect(f.created).toEqual([a, b, c]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+it("does not interrupt admitted analysis when memory pressure arrives", async () => {
+  const memory = automaticPolicy();
+  const f = await fixture(false, "auto", memory.policy);
+  const [a, b] = f.paths as [string, string];
+  let release!: () => void;
+  let markEntered!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    markEntered = resolve;
+  });
+  try {
+    for (const path of [a, b]) {
+      expect((await f.session.open(path)).ok).toBe(true);
+      expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    }
+    f.onExecute((operation) => {
+      if (operation !== "address_name") return undefined;
+      markEntered();
+      return gate;
+    });
+    const running = f.session.execute("address_name", {});
+    await entered;
+    memory.setPressure("high");
+    memory.tick();
+    expect(f.closed).toEqual([]);
+    release();
+    expect((await running).ok).toBe(true);
+    memory.tick();
+    await waitFor(() => expect(f.closed).toEqual([a]));
+    expect(f.session.activeTarget()?.path).toBe(b);
+  } finally {
+    release();
+    await f.session.close();
+  }
+});
+
+it("keeps failed automatic cleanup owned and retries it on the next switch", async () => {
+  const memory = automaticPolicy();
+  const f = await fixture(false, "auto", memory.policy);
+  const [a, b, c] = f.paths as [string, string, string];
+  try {
+    for (const path of [a, b, c]) {
+      expect((await f.session.open(path)).ok).toBe(true);
+      expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    }
+    f.failNextClose(a);
+    memory.setPressure("high");
+    memory.tick();
+    await waitFor(() => expect(f.closed).toEqual([a]));
+    expect(f.session.activeTarget()?.path).toBe(c);
+    memory.setPressure("normal");
+    expect((await f.session.open(a)).ok).toBe(true);
+    expect(f.closed).toEqual([a, a]);
+    expect((await f.session.execute("address_name", {})).ok).toBe(true);
+  } finally {
+    await f.session.close();
+  }
+});
+
+it("falls back to two targets when memory availability is unknown", async () => {
+  const memory = automaticPolicy();
+  memory.setPressure("unknown");
+  const f = await fixture(false, "auto", memory.policy);
+  try {
+    for (const path of f.paths.slice(0, 3)) {
+      expect((await f.session.open(path)).ok).toBe(true);
+      expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    }
+    expect(f.closed).toEqual([f.paths[0]]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+it("does not retain previous targets when a switch observes high memory pressure", async () => {
+  const memory = automaticPolicy();
+  const f = await fixture(false, "auto", memory.policy);
+  const [a, b, c] = f.paths as [string, string, string];
+  try {
+    for (const path of [a, b]) {
+      expect((await f.session.open(path)).ok).toBe(true);
+      expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    }
+    memory.setPressure("high");
+    expect((await f.session.open(c)).ok).toBe(true);
+    expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    expect(f.closed).toEqual([a, b]);
+    expect(f.session.activeTarget()?.path).toBe(c);
+  } finally {
+    await f.session.close();
+  }
+});
 
 it.each([3, 4, 5] as const)(
   "reuses %i targets and evicts the least recently used",

@@ -1,4 +1,6 @@
 import type { AnalysisSettingsReader } from "../domain/analysisSettings.js";
+import { freemem, totalmem } from "node:os";
+import { physicalMemoryPressure } from "../domain/retainedTargets.js";
 import { runtimeAnalysisConfig } from "../config/runtimeAnalysisSettings.js";
 import { isAppleDispatchMetadataTarget } from "../domain/native/objcSwiftMetadata.js";
 import { snapshotEnvironment } from "../process/snapshotEnvironment.js";
@@ -104,6 +106,25 @@ const composeDeepBinarySession = (
     ),
     createBundleResourceFactory(environment, platform, settings),
     config.ghidraRetainedTargets ?? 2,
+    config.ghidraRetainedTargets === "auto" && platform === "win32"
+      ? {
+          now: () => Date.now(),
+          pressure: () => {
+            try {
+              const total = totalmem();
+              const free = freemem();
+              return physicalMemoryPressure(total, free);
+            } catch {
+              return "unknown";
+            }
+          },
+          schedule: (callback) => {
+            const timer = setInterval(callback, 30_000);
+            timer.unref();
+            return () => clearInterval(timer);
+          },
+        }
+      : undefined,
   );
 };
 
