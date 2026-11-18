@@ -937,7 +937,7 @@ const nativeDecompilerCheck = ({
           osArch === undefined
             ? "The Java probe did not report os.arch; the JVM-selected native decompiler directory is unknown and cannot be matched to the validated host directory"
             : `JVM reports unrecognized os.arch=${osArch}; its selected native decompiler directory is unknown and cannot be matched to the validated host directory`,
-        remediation: `Point JAVA_HOME at a JDK whose reported architecture maps to the validated Ghidra decompiler (${validatedDirectory ?? "unsupported host"}). REA does not build or install native tools.`,
+        remediation: `Point REA_GHIDRA_JAVA_HOME (or JAVA_HOME when the REA-specific setting is unset) at a JDK whose reported architecture maps to the validated Ghidra decompiler (${validatedDirectory ?? "unsupported host"}). REA does not build or install native tools.`,
       });
     if (
       validatedDirectory !== undefined &&
@@ -949,7 +949,7 @@ const nativeDecompilerCheck = ({
         passed: false,
         code: "executable_missing",
         detail: `JVM reports os.arch=${osArch}, so Ghidra selects its native decompiler from os/${selectedDirectory}, but the validated decompiler targets ${validatedDirectory} (host ${platform}/${architecture})`,
-        remediation: `Point JAVA_HOME at a JDK whose architecture matches the built decompiler (${validatedDirectory}). REA does not build or install native tools.`,
+        remediation: `Point REA_GHIDRA_JAVA_HOME (or JAVA_HOME when the REA-specific setting is unset) at a JDK whose architecture matches the built decompiler (${validatedDirectory}). REA does not build or install native tools.`,
       });
     if (osName === undefined)
       return installationCheck({
@@ -958,7 +958,7 @@ const nativeDecompilerCheck = ({
         code: "executable_missing",
         detail:
           "The Java probe did not report os.name; the JVM-selected native decompiler OS directory is unknown and cannot be matched to the validated host platform",
-        remediation: `Point JAVA_HOME at a JDK whose reported operating system matches the host platform (${platform}). REA does not build or install native tools.`,
+        remediation: `Point REA_GHIDRA_JAVA_HOME (or JAVA_HOME when the REA-specific setting is unset) at a JDK whose reported operating system matches the host platform (${platform}). REA does not build or install native tools.`,
       });
     if (!jvmOsNameMatchesPlatform(platform, osName) && path !== null)
       return installationCheck({
@@ -966,7 +966,7 @@ const nativeDecompilerCheck = ({
         passed: false,
         code: "executable_missing",
         detail: `JVM reports os.name=${osName}, which does not match the validated host platform ${platform} (host ${platform}/${architecture})`,
-        remediation: `Point JAVA_HOME at a JDK whose reported operating system matches the host platform (${platform}). REA does not build or install native tools.`,
+        remediation: `Point REA_GHIDRA_JAVA_HOME (or JAVA_HOME when the REA-specific setting is unset) at a JDK whose reported operating system matches the host platform (${platform}). REA does not build or install native tools.`,
       });
   }
   return installationCheck({
@@ -1100,7 +1100,7 @@ const javaRemediation = (
     return `The Ghidra installation's Java bounds could not be read (${requirement.unresolved}). Install a 64-bit full JDK inside the declared application.java.min and application.java.max.`;
   return configuredHome === undefined
     ? `Select ${range} on PATH, or set JAVA_HOME to its installation root before starting REA.${platform === "darwin" ? " Homebrew OpenJDK can be keg-only: set JAVA_HOME to the selected formula's libexec/openjdk.jdk/Contents/Home (for example /opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home or /usr/local/opt/openjdk/libexec/openjdk.jdk/Contents/Home). The installed JDK must satisfy the declared Ghidra Java bounds." : ""}`
-    : `Update JAVA_HOME to the root of ${range} installation.`;
+    : `Update REA_GHIDRA_JAVA_HOME, or JAVA_HOME if the REA-specific setting is unset, to the root of a ${range} installation.`;
 };
 
 export const systemGhidraInstallationHost = (): GhidraInstallationHost => ({

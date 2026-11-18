@@ -6,11 +6,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/morluto/rea.git"
+    "url": "git+https://github.com/DearJIAN/rea-windows-optimized.git"
   },
-  "homepage": "https://github.com/morluto/rea#readme",
+  "homepage": "https://github.com/DearJIAN/rea-windows-optimized#readme",
   "bugs": {
-    "url": "https://github.com/morluto/rea/issues"
+    "url": "https://github.com/DearJIAN/rea-windows-optimized/issues"
   },
   "keywords": [
     "reverse-engineering",

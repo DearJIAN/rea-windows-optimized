@@ -250,6 +250,18 @@ describe("runtime configuration", () => {
       false,
     );
     expect(parseConfig({ JAVA_HOME: "relative/jdk" }).ok).toBe(false);
+    expect(
+      parseConfig({
+        JAVA_HOME: "/other/jdk",
+        REA_GHIDRA_JAVA_HOME: "/ghidra/jdk",
+      }),
+    ).toMatchObject({
+      ok: true,
+      value: { ghidraJavaHome: "/ghidra/jdk" },
+    });
+    expect(parseConfig({ REA_GHIDRA_JAVA_HOME: "relative/jdk" }).ok).toBe(
+      false,
+    );
   });
 
   it("parses an optional absolute BYO ilspycmd path", () => {
@@ -531,6 +543,7 @@ describe("configuration failure diagnostics", () => {
   it.each([
     ["GHIDRA_INSTALL_DIR", "./fixture"],
     ["JAVA_HOME", "./jdk"],
+    ["REA_GHIDRA_JAVA_HOME", "./jdk"],
     ["REA_GHIDRA_NATIVEAOT_JAR", "./missing.jar"],
   ])(
     "names the rejected %s and its absolute-path constraint",

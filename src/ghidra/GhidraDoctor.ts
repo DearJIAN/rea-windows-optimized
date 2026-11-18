@@ -1,3 +1,4 @@
+import { selectGhidraJavaHome } from "../config/ghidraJavaHome.js";
 import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
 import { analysisClientFailureForOperation } from "../providers/AnalysisClientFailure.js";
 import type { RetainedResourceScope } from "../ports/AnalysisProvider.js";
@@ -24,6 +25,7 @@ import {
 /** Client settings consulted by this readiness probe. */
 export const GHIDRA_DOCTOR_SETTINGS = [
   "GHIDRA_INSTALL_DIR",
+  "REA_GHIDRA_JAVA_HOME",
   "JAVA_HOME",
   "PATH",
   "REA_GHIDRA_PROJECT_PATH",
@@ -142,6 +144,7 @@ export const inspectSystemGhidraProvider = async (
   platform?: NodeJS.Platform,
 ): Promise<DoctorProviderInspection> => {
   try {
+    const javaHome = selectGhidraJavaHome(environment);
     const installation = await inspectGhidraInstallation({
       environment,
       resourceOwner,
@@ -150,9 +153,7 @@ export const inspectSystemGhidraProvider = async (
       ...(environment.GHIDRA_INSTALL_DIR === undefined
         ? {}
         : { installDir: environment.GHIDRA_INSTALL_DIR }),
-      ...(environment.JAVA_HOME === undefined
-        ? {}
-        : { javaHome: environment.JAVA_HOME }),
+      ...(javaHome === undefined ? {} : { javaHome }),
     });
     // The restricted-host denial reported for #7075 is Windows-specific.
     const temporaryDirectory =

@@ -5,16 +5,12 @@ checkpoint design and enables it on Windows x64. Nothing is re-implemented: the
 same `REA_GHIDRA_CHECKPOINT_DIR`, manifest v2, SHA-256 binding, packed Program
 `.gzf`, `-noanalysis` restore, atomic publication and lease are reused.
 
-## Relationship to upstream
+## Repository and history
 
-- Upstream: <https://github.com/morluto/rea>, `main` here is the untouched
-  upstream baseline, `upstream` names the original remote.
-- Development happens on `feat/windows-ghidra-checkpoint`; `origin` is the
-  private fork. Upstream licence, notices and Git history are preserved.
-- The Windows work is a bounded patch set: configuration path validation,
-  provider admission, a Windows ACL gate for the cache directory, a lease
-  directory that is no longer hard-coded to `/tmp`, and an explicit
-  `checkpoint_authority` field in the Java bridge session descriptor.
+`main` is the maintained branch of the private `DearJIAN/rea-windows-optimized`
+repository. Its history includes the upstream REA baseline and the Windows
+checkpoint and session-reuse changes. Upstream licence and notices remain in
+place. The checkout does not require an upstream remote for normal use.
 
 ## What Windows support adds
 
@@ -57,10 +53,14 @@ Node-API level recorded in `native/windows/build/manifest.json`.
 
 ```powershell
 $env:GHIDRA_INSTALL_DIR = 'D:\TOOLS\ghidra\ghidra_12.1.4_PUBLIC'
-$env:JAVA_HOME = 'D:\TOOLS\jdk\jdk-21.0.13+9'
+$env:REA_GHIDRA_JAVA_HOME = 'D:\TOOLS\jdk\jdk-21.0.13+9'
 $env:REA_GHIDRA_CHECKPOINT_DIR = 'D:\rea-checkpoints'
 node scripts/rea.mjs --mcp
 ```
+
+`REA_GHIDRA_JAVA_HOME` selects a JDK for Ghidra only and takes precedence over
+`JAVA_HOME` for that provider; other Java applications keep their own settings.
+If it is unset, Ghidra continues to use `JAVA_HOME` as before.
 
 The acceptance harness starts independent MCP processes from this checkout and
 covers cold analysis, cross-process restore, DLL switching, same-SHA copies,
@@ -243,20 +243,12 @@ Restart the client after editing `mcp.json`, then verify with a harmless call
 (`list_providers`, `open_binary`, one decompile). Roll back by deleting the
 entry; the globally installed REA 6.7.0 entry is untouched.
 
-## Sync upstream and roll back
+## Roll back
 
-```powershell
-git fetch upstream
-git switch main
-git merge --ff-only upstream/main     # keep the baseline honest
-git switch feat/windows-ghidra-checkpoint
-git merge main                        # resolve conflicts here
-```
-
-To roll back to stock REA, use a clean clone of `morluto/rea` (or
-`git switch main` in this repository) and leave the checkpoint directory
-unconfigured. The cache never touches the target binary and is not read by stock
-REA.
+The installed package and its previous user configuration should be backed up
+before replacement. To revert, restore that backup and the previous environment
+settings; do not delete the checkpoint directory as part of rollback. The Git
+history on `main` also retains the original baseline and the Windows changes.
 
 ## Not supported
 

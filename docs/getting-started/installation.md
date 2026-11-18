@@ -1599,6 +1599,8 @@ rea decompile /absolute/target/app --procedure entry --provider ghidra --json
 
 ```powershell
 $env:REA_GHIDRA_CHECKPOINT_DIR = 'D:\rea-checkpoints'
+# Optional: select a JDK for Ghidra without changing JAVA_HOME for other tools.
+$env:REA_GHIDRA_JAVA_HOME = 'C:\Program Files\Java\jdk-21'
 rea decompile D:\target\app.exe --procedure entry --provider ghidra --json
 ```
 

@@ -1,3 +1,4 @@
+import { selectGhidraJavaHome } from "./ghidraJavaHome.js";
 import {
   ConfigurationError,
   type ConfigurationSettingIssue,
@@ -146,7 +147,7 @@ export const parseConfig = (
     ...(env.REA_GHIDRA_CHECKPOINT_DIR === undefined
       ? {}
       : { ghidraCheckpointDirectory: env.REA_GHIDRA_CHECKPOINT_DIR }),
-    ghidraJavaHome: env.JAVA_HOME,
+    ghidraJavaHome: selectGhidraJavaHome(env),
     ghidraStartupTimeoutMs: ghidraStartup ?? DEFAULT_GHIDRA_STARTUP_TIMEOUT_MS,
     ...(decompilePayload === undefined || decompilePayload === null
       ? {}
