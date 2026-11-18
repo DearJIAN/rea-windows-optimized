@@ -13,9 +13,11 @@ export const composeBinarySession = (
   registry: AnalysisProviderRegistry,
   auxiliaryProviders: readonly AnalysisProvider[] = [],
   bundleResourceFactory?: BundleResourceClientFactory,
+  retainedTargetLimit: 2 | 3 | 4 | 5 = 2,
 ): BinarySession =>
   new BinarySession(
     SessionProviderRouter.selectable(registry, auxiliaryProviders),
     new InvestigationRecords(),
     bundleResourceFactory,
+    retainedTargetLimit,
   );

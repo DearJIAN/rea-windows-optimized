@@ -23,9 +23,14 @@ const identity = {
   version: "1",
 };
 
-async function fixture(sharedExclusion = false) {
+async function fixture(
+  sharedExclusion: boolean | ((path: string) => string) = false,
+  retainedTargetLimit: 2 | 3 | 4 | 5 = 2,
+) {
   const dir = await createTestTempDirectory("rea-switch-retain-");
-  const paths = ["a", "b", "c"].map((name) => join(dir, `${name}.elf`));
+  const paths = ["a", "b", "c", "d", "e", "f"].map((name) =>
+    join(dir, `${name}.elf`),
+  );
   for (const path of paths) await writeFile(path, elf(2, 1, 62));
   const created: string[] = [];
   const closed: string[] = [];
@@ -57,6 +62,7 @@ async function fixture(sharedExclusion = false) {
       };
     },
     {
+      retainedTargetLimit,
       resolveAnalysisProfile: async (target) =>
         ok({
           profile: createAnalysisProfile(identity, {
@@ -64,9 +70,12 @@ async function fixture(sharedExclusion = false) {
             generation,
           }),
           retainOnTargetSwitch: true,
-          targetSwitchExclusionKey: sharedExclusion
-            ? "same-lease"
-            : target.path,
+          targetSwitchExclusionKey:
+            typeof sharedExclusion === "function"
+              ? sharedExclusion(target.path)
+              : sharedExclusion
+                ? "same-lease"
+                : target.path,
         }),
     },
   );
@@ -87,6 +96,145 @@ async function fixture(sharedExclusion = false) {
     },
   };
 }
+
+it.each([3, 4, 5] as const)(
+  "reuses %i targets and evicts the least recently used",
+  async (capacity) => {
+    const f = await fixture(false, capacity);
+    const selected = f.paths.slice(0, capacity);
+    const first = selected[0]!;
+    const second = selected[1]!;
+    const next = f.paths[capacity]!;
+    try {
+      for (const path of selected) {
+        expect((await f.session.open(path)).ok).toBe(true);
+        expect((await f.session.execute("address_name", {})).ok).toBe(true);
+      }
+      expect((await f.session.open(first)).ok).toBe(true);
+      expect((await f.session.execute("address_name", {})).ok).toBe(true);
+      expect(f.created).toEqual(selected);
+      expect(f.closed).toEqual([]);
+      expect((await f.session.open(next)).ok).toBe(true);
+      expect((await f.session.execute("address_name", {})).ok).toBe(true);
+      expect(f.closed).toEqual([second]);
+      expect(f.created).toEqual([...selected, next]);
+      expect((await f.session.close()).ok).toBe(true);
+      expect(f.closed).toHaveLength(capacity + 1);
+    } finally {
+      await f.session.close();
+    }
+  },
+);
+
+it("releases a conflicting parked lease without evicting unrelated owners", async () => {
+  const f = await fixture(
+    (path) => (/[\\/][ac]\.elf$/u.test(path) ? "alias" : path),
+    4,
+  );
+  const [a, b, c, d] = f.paths as [string, string, string, string];
+  try {
+    for (const path of [a, b, d, c]) {
+      expect((await f.session.open(path)).ok).toBe(true);
+      expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    }
+    expect(f.closed).toEqual([a]);
+    expect((await f.session.open(b)).ok).toBe(true);
+    expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    expect(f.created).toEqual([a, b, d, c]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+it("retains remaining parked owners when a multi-target final cleanup fails", async () => {
+  const f = await fixture(false, 4);
+  const [a, b, c, d] = f.paths as [string, string, string, string];
+  try {
+    for (const path of [a, b, c, d]) {
+      expect((await f.session.open(path)).ok).toBe(true);
+      expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    }
+    f.failNextClose(b);
+    const closed = await f.session.close();
+    expect(closed.ok).toBe(false);
+    expect(f.closed).toEqual([d, a, b]);
+    expect((await f.session.close()).ok).toBe(true);
+    expect(f.closed).toEqual([d, a, b, b, c]);
+    if (!closed.ok) expect(closed.error.cleanupIncomplete).toBe(false);
+  } finally {
+    await f.session.close();
+  }
+});
+
+it("reset releases every parked target while keeping the active one", async () => {
+  const f = await fixture(false, 4);
+  const [a, b, c, d] = f.paths as [string, string, string, string];
+  try {
+    for (const path of [a, b, c, d]) {
+      expect((await f.session.open(path)).ok).toBe(true);
+      expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    }
+    expect((await f.session.resetInvestigation()).ok).toBe(true);
+    expect(f.closed).toEqual([a, b, c]);
+    expect(f.session.activeTarget()?.path).toBe(d);
+  } finally {
+    await f.session.close();
+  }
+});
+
+it("reset cancellation during parked cleanup retains the other owners", async () => {
+  const f = await fixture(false, 4);
+  const [a, b, c, d] = f.paths as [string, string, string, string];
+  const controller = new AbortController();
+  try {
+    for (const path of [a, b, c, d]) {
+      expect((await f.session.open(path)).ok).toBe(true);
+      expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    }
+    f.onClose((path) => {
+      if (path === a) controller.abort("reset cancelled during cleanup");
+    });
+    const reset = await f.session.resetInvestigation({
+      signal: controller.signal,
+    });
+    expect(reset.ok).toBe(false);
+    if (reset.ok) throw new Error("expected cancellation");
+    expect(reset.error._tag).toBe("AnalysisCancelledError");
+    expect(reset.error.cause).toBe("reset cancelled during cleanup");
+    expect(f.closed).toEqual([a]);
+    expect(f.session.activeTarget()?.path).toBe(d);
+    expect((await f.session.close()).ok).toBe(true);
+    expect(f.closed).toEqual([a, d, b, c]);
+  } finally {
+    await f.session.close();
+  }
+});
+
+it("preserves other parked owners after cancellation and a failed multi-target eviction", async () => {
+  const f = await fixture(false, 3);
+  const [a, b, c, d] = f.paths as [string, string, string, string];
+  const controller = new AbortController();
+  try {
+    for (const path of [a, b, c]) {
+      expect((await f.session.open(path)).ok).toBe(true);
+      expect((await f.session.execute("address_name", {})).ok).toBe(true);
+    }
+    f.failNextClose(a);
+    f.onClose((path) => {
+      if (path === a) controller.abort("eviction cancelled");
+    });
+    const switched = await f.session.open(d, { signal: controller.signal });
+    expect(switched.ok).toBe(false);
+    if (switched.ok) throw new Error("expected cancellation");
+    expect(switched.error.cleanupIncomplete).toBe(true);
+    expect(f.session.activeTarget()?.path).toBe(c);
+    expect((await f.session.close()).ok).toBe(true);
+    expect(f.closed).toEqual([a, a, c, b]);
+    expect(switched.error.cleanupIncomplete).toBe(false);
+  } finally {
+    await f.session.close();
+  }
+});
 
 it("reuses A after A/B/A and closes both owners", async () => {
   const f = await fixture();

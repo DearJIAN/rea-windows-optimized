@@ -89,14 +89,19 @@ it does not establish exactly which Ghidra startup stage had been reached.
 
 ## Reusing a loaded target
 
-On Windows, a stock read-only Ghidra checkpoint session can keep one previous
-loaded target alive while another is active. Returning to the same target path,
+On Windows, a stock read-only Ghidra checkpoint session keeps up to two loaded
+targets by default, including the active target. Set the MCP server or CLI
+environment variable `REA_GHIDRA_RETAINED_TARGETS` to `3`, `4`, or `5` to
+increase this capacity; `2` explicitly selects the default. Other values are
+configuration errors. Restart the REA process after changing its environment.
+No Ghidra process is preloaded: eligible targets enter the pool on use. Returning to the same target path,
 bytes and analysis profile reuses its live client after a health check; other
 providers and non-checkpoint sessions keep their existing lifecycle. This is a
 shared REA session behavior, independent of the MCP client; a new REA process
 still restores from the checkpoint. `close_binary`, runtime disposal and
-`reset_investigation` release the standby. Selecting a third target first evicts
-the standby; a failed cleanup is retained and must be retried. Target/profile
+`reset_investigation` release the standbys. At capacity, selecting another target
+first evicts the least recently used standby; a failed cleanup is retained and
+must be retried before another target is admitted. Target/profile
 changes or an unhealthy standby do not reuse it. Different paths sharing the
 same checkpoint key cannot hold its exclusive lease concurrently; the previous
 client is closed before opening that alias. If the current composite
@@ -104,8 +109,9 @@ session has instantiated another provider, the switch closes that composite
 instead of retaining its other provider's resources.
 
 A standby keeps its Ghidra process, memory, private files and checkpoint lease
-until eviction or close. At most two Ghidra clients are owned by one REA session;
-this is a process-count bound, not a hard memory limit. A competing REA process
+until eviction or close. The configured limit is per REA session; it is a
+process-count bound, not a hard memory limit or automatic memory-pressure guard.
+A competing REA process
 cannot acquire a checkpoint while either of these clients owns its lease. Close
 the binary session to release both. The target executable is still read-only.
 

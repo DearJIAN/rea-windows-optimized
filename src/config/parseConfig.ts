@@ -147,6 +147,9 @@ export const parseConfig = (
     ...(env.REA_GHIDRA_CHECKPOINT_DIR === undefined
       ? {}
       : { ghidraCheckpointDirectory: env.REA_GHIDRA_CHECKPOINT_DIR }),
+    ...(env.REA_GHIDRA_RETAINED_TARGETS === undefined
+      ? {}
+      : { ghidraRetainedTargets: env.REA_GHIDRA_RETAINED_TARGETS }),
     ghidraJavaHome: selectGhidraJavaHome(env),
     ghidraStartupTimeoutMs: ghidraStartup ?? DEFAULT_GHIDRA_STARTUP_TIMEOUT_MS,
     ...(decompilePayload === undefined || decompilePayload === null

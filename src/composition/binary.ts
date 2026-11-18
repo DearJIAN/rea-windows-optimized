@@ -103,6 +103,7 @@ const composeDeepBinarySession = (
       (declaration) => new LazyAnalysisProvider(declaration),
     ),
     createBundleResourceFactory(environment, platform, settings),
+    config.ghidraRetainedTargets ?? 2,
   );
 };
 

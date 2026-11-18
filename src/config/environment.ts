@@ -101,6 +101,10 @@ const environmentSchema = z.object({
       "must be an absolute directory path",
     )
     .optional(),
+  REA_GHIDRA_RETAINED_TARGETS: z
+    .enum(["2", "3", "4", "5"])
+    .transform((value) => Number(value) as 2 | 3 | 4 | 5)
+    .optional(),
   REA_GHIDRA_PROGRAM_NAME: ghidraProgramNameSchema.optional(),
   REA_GHIDRA_LANGUAGE_ID: ghidraLanguageIdSchema.optional(),
   REA_GHIDRA_COMPILER_SPEC_ID: ghidraCompilerSpecIdSchema.optional(),

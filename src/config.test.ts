@@ -81,6 +81,19 @@ it("keeps the caller's opt-in Ghidra checkpoint directory and leaves it disabled
   expect(parseConfig({ REA_GHIDRA_CHECKPOINT_DIR: "relative" }).ok).toBe(false);
 });
 
+it("accepts only supported retained target capacities", () => {
+  for (const capacity of [2, 3, 4, 5] as const) {
+    const parsed = parseConfig({
+      REA_GHIDRA_RETAINED_TARGETS: String(capacity),
+    });
+    expect(parsed.ok && parsed.value.ghidraRetainedTargets).toBe(capacity);
+  }
+  for (const value of ["", "0", "1", "6", "3.0", " 3 ", "foo"])
+    expect(parseConfig({ REA_GHIDRA_RETAINED_TARGETS: value }).ok).toBe(false);
+  const defaults = parseConfig({});
+  expect(defaults.ok && defaults.value.ghidraRetainedTargets).toBeUndefined();
+});
+
 it.skipIf(process.platform !== "win32")(
   "accepts a Windows absolute Ghidra checkpoint directory",
   () => {

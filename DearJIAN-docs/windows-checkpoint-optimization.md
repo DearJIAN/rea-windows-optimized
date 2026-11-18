@@ -2,6 +2,8 @@
 
 这篇笔记解释本仓库相较原版 REA 所做的 Windows Ghidra 优化，以及它在什么情况下能减少等待。配置、验收细节和最新技术约束以 [Windows Checkpoint 技术文档](../docs/windows/checkpoints.md)为准；历史变更见 [Windows 变更记录](WINDOWS_CHANGELOG.md)。
 
+**后续更新：** 下文固定快照描述的是最初的双目标实现。当前代码支持配置总容量 2～5，默认 2；按需自动保留，容量满时淘汰最久未使用的备用目标。配置、资源和租约约束见 [Windows 技术文档](../docs/windows/checkpoints.md#reusing-a-loaded-target)。历史比较与文件清单仍保留其原始快照，不代表当前版本完整差异。
+
 ## 对照基线与范围
 
 下文固定比较两个 Git 快照，而不是假定今天的上游主分支与当时相同：
@@ -33,7 +35,7 @@ git diff 675287517c98c702ee88ad036c5e3b8dd4bcc7a7 94435cae974aeeb9b0b6b7e0e07c0f
 | [scripts/build-windows-native.mjs](../scripts/build-windows-native.mjs)、[package.json](../package.json)                                                                                                                                                                                                                                         | Windows 原生组件的构建入口和验收脚本命令；组件需在目标环境自行构建和校验。                                                                                                                                   |
 | [GhidraCheckpoint.test.ts](../src/ghidra/GhidraCheckpoint.test.ts)、[WindowsCheckpointDirectory.test.ts](../src/windows/WindowsCheckpointDirectory.test.ts)、[BinarySessionRetainedSwitch.test.ts](../src/application/binary/BinarySessionRetainedSwitch.test.ts)、[真实 Ghidra 验收脚本](../scripts/verify-real-ghidra-windows-checkpoints.mjs) | 分别覆盖快照、目录权限、切换生命周期与真实工具工作流；模拟测试不等同于真实 Ghidra 验收。                                                                                                                     |
 
-## 核心改动怎样串起来
+## 最初双目标版本的核心改动怎样串起来
 
 ### 1. 从 Windows 配置到 Checkpoint 准入
 
@@ -55,7 +57,7 @@ git diff 675287517c98c702ee88ad036c5e3b8dd4bcc7a7 94435cae974aeeb9b0b6b7e0e07c0f
 
 `BinarySession.ts` 增加一个 `#parked` 绑定：A 切到 B 时，只有双方允许保留、排他键不同、没有不适用的 snapshot 等条件成立，才把 A 暂存。B 切回 A 时，通过 `BinarySessionOpen.ts` 的 `sameSessionTarget` 及分析配置比较确认匹配，再检查客户端健康；成功后交换 active 与 parked。否则清理旧备用会话，再按正常流程打开。`CompositeProvider.ts` 还检查复合客户端的资格，避免把已经使用其他 Provider 的资源一并错误保留。
 
-选择第三个目标前先淘汰备用客户端；若关闭失败，会保留清理所有权以便重试，而不是丢掉进程或租约的责任。显式关闭、重置和失败恢复同样处理备用资源。不同路径可能指向相同 Checkpoint：排他键相同时不能同时保留，需先关闭旧客户端再打开。完整分支及取消、失败处理以 `BinarySession.ts` 为准，相关回归见 `BinarySessionRetainedSwitch.test.ts`。
+在该固定快照的默认容量下，选择第三个目标前先淘汰备用客户端；若关闭失败，会保留清理所有权以便重试，而不是丢掉进程或租约的责任。显式关闭、重置和失败恢复同样处理备用资源。不同路径可能指向相同 Checkpoint：排他键相同时不能同时保留，需先关闭旧客户端再打开。当前多目标版本的完整分支及取消、失败处理以 `BinarySession.ts` 为准，相关回归见 `BinarySessionRetainedSwitch.test.ts`。
 
 ### 4. 其他配套变化
 
@@ -81,17 +83,17 @@ Ghidra 首次打开一个程序时，需要导入文件并执行自动分析，�
 | 新 REA 进程再次打开 A | 校验并从磁盘恢复已保存的 Program                                | 再次自动分析                   | 启动 Ghidra、导入快照和建立连接 |
 | 同一会话中 A → B → A  | 符合条件时保留 A 的活动 Ghidra 客户端，切回前检查身份和健康状态 | 再次启动 Ghidra 和从磁盘恢复 A | 持有额外进程、内存和租约        |
 
-切换复用要求同一路径、文件内容和分析配置匹配，且备用会话健康；最多保留当前和一个备用 Ghidra 客户端。选择第三个目标会先释放备用目标；关闭分析会话也会释放。不同路径即使内容相同，也不能同时持有同一 Checkpoint 的独占租约。具体释放与异常处理见[已加载目标复用](../docs/windows/checkpoints.md#reusing-a-loaded-target)。
+切换复用要求同一路径、文件内容和分析配置匹配，且备用会话健康；默认保留当前和一个备用 Ghidra 客户端，可配置更大容量。默认容量下选择第三个目标会先释放备用目标；关闭分析会话也会释放。不同路径即使内容相同，也不能同时持有同一 Checkpoint 的独占租约。具体释放与异常处理见[已加载目标复用](../docs/windows/checkpoints.md#reusing-a-loaded-target)。
 
 ### 三个及更多 DLL 怎么切换
 
-两个客户端的上限是同一个 REA 会话中**同时驻留的数量**，不是允许分析的 DLL 总数。假设各目标都符合复用条件、各自已有有效 Checkpoint：
+以下是默认容量 2 的行为：上限是同一个 REA 会话中**同时驻留的数量**，不是允许分析的 DLL 总数。假设各目标都符合复用条件、各自已有有效 Checkpoint：
 
 - `A → B → A`：A 作为备用会话仍在，切回时可以复用；之后继续 A、B 之间切换也可以复用。
 - `A → B → C`：打开 C 前，备用的 A 被释放；完成后 C 为当前目标，B 可作为备用。接着回到 B 可以复用；如果改为回到 A，则需重新启动 Ghidra 并从磁盘恢复 A。
 - `A → B → C → A → B → C`：每次回到之前已被淘汰的目标，无法命中已加载会话；有效磁盘 Checkpoint 仍可避免重复自动分析，但不能省去 Ghidra 启动和恢复开销。4、5 个或更多目标的循环同理。
 
-这是按当前代码推导的切换行为，实际是否命中还取决于路径、内容、配置、健康状态和排他租约；这里没有对 3 个以上目标做实测。理论上可以设计有容量和资源上限的多目标驻留池，减少多个热点目标的重复启动，但每个驻留目标会占用 Ghidra 进程、内存和租约，还需处理淘汰、取消和清理失败；当前版本没有实现该功能，也不能把现有两目标的测量结果直接推广到多目标。
+实际是否命中还取决于路径、内容、配置、健康状态和排他租约。将容量配置为 3～5 后，符合条件的更多目标可驻留；每个目标都可能占用 Ghidra 进程、内存和租约，不能把两目标的测量结果直接推广到多目标。
 
 ## 快照如何保持可用和隔离
 
@@ -107,7 +109,7 @@ REA 使用目标内容及影响分析结果的配置区分快照；内容或配�
 
 - 首次自动分析不能从中途断点续跑；首次分析没有保证加速。
 - Windows Checkpoint 会话中的数据库编辑仍受限制；不支持的配置继续使用各自既有工作流。
-- 备用 Ghidra 客户端持续占用进程、内存和租约；两个客户端是数量上限，不是固定内存上限。
+- 备用 Ghidra 客户端持续占用进程、内存和租约；配置的客户端数量上限不是固定内存上限。
 - 不同 REA 进程不能同时持有同一目标的独占租约。恢复仍有 Ghidra 启动开销，时间随机器、目标和工作负载变化。
 
 ## 固定快照的完整文件清单

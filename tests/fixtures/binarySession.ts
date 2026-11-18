@@ -29,6 +29,7 @@ import { observed } from "./analysisExecution.js";
 import { createTestTempDirectory } from "./temporaryDirectory.js";
 
 type TestBinarySessionOptions = {
+  readonly retainedTargetLimit?: 2 | 3 | 4 | 5;
   readonly auxiliaryProviders?: readonly AnalysisProvider[];
   readonly resolveAnalysisProfile?: (
     target: BinaryTarget,
@@ -120,7 +121,12 @@ export const createTestBinarySession = (
   provider: AnalysisProvider | FixtureClientFactory,
   options: TestBinarySessionOptions = {},
 ): BinarySession =>
-  new BinarySession(createTestProviderRouter(provider, options));
+  new BinarySession(
+    createTestProviderRouter(provider, options),
+    undefined,
+    undefined,
+    options.retainedTargetLimit,
+  );
 
 /** Materialize two distinct targets for session lifecycle tests. */
 export const createBinarySessionTargets = async (): Promise<

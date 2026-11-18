@@ -69,6 +69,10 @@ REA_GHIDRA_CHECKPOINT_DIR = 'D:\rea-checkpoints'
 
 在同一 REA 会话内分析已处理的 A、B 后切回 A，可以体验符合条件的会话复用；它与重启后的磁盘 Checkpoint 恢复是两个不同场景。测试完成后关闭分析会话。恢复依赖目标内容和分析配置匹配，其他限制和排错方法见 [Windows Checkpoint 说明](docs/windows/checkpoints.md)。
 
+默认最多同时保留 2 个目标（包括当前目标）。如需在更多已分析 DLL 之间切换，可在 MCP 服务的环境配置中设置 `REA_GHIDRA_RETAINED_TARGETS = '3'`、`'4'` 或 `'5'`，然后重新连接服务；符合条件时自动按需保留，满额后淘汰最久未使用的备用目标。该设置只限制目标数量，不限制内存；更多 Ghidra 进程会消耗更多内存并持有各自的 Checkpoint 租约。详见[配置与生命周期](docs/windows/checkpoints.md#reusing-a-loaded-target)。
+
+3～5 个真实 DLL 的切换与资源实测见 [DearJIAN 的测试记录](DearJIAN-docs/multi-target-pool-results.md)。
+
 关于恢复与复用分别节省了哪些步骤，以及已有验证的范围，见[优化原理和验证证据](DearJIAN-docs/windows-checkpoint-optimization.md#验证证据与局限)。
 
 ## 优化前后
@@ -103,12 +107,12 @@ REA_GHIDRA_CHECKPOINT_DIR = 'D:\rea-checkpoints'
 ## 具体做了什么
 
 1. **Windows 持久 Checkpoint**：在 Windows x64 支持保存和恢复受 REA 管理的 Ghidra Program。依据文件内容与分析配置区分缓存，并通过校验、原子发布和独占租约保护缓存；缓存不可用时保留错误信息和恢复路径。
-2. **多 DLL 会话复用**：对符合条件的只读 Ghidra Checkpoint 会话，除当前目标外最多保留一个已加载目标。切回相同路径、内容和分析配置的目标前检查会话健康状态；关闭会话或选择第三个目标时释放相应资源。
+2. **多 DLL 会话复用**：对符合条件的只读 Ghidra Checkpoint 会话，默认最多保留 2 个已加载目标，可配置为 3～5 个。切回相同路径、内容和分析配置的目标前检查会话健康状态；容量用满时淘汰最久未使用的备用目标。
 3. **Windows 路径与目录权限**：支持 Windows 绝对路径，检查缓存目录 ACL、独占租约和本地文件系统约束，避免将其他用户可写的已有目录直接当作私有缓存。
 4. **Ghidra 专用 JDK 配置**：可用 `REA_GHIDRA_JAVA_HOME` 为 Ghidra 选择 JDK；设置后它优先于 `JAVA_HOME`，不要求更改其他 Java 程序的设置。
 5. **真实 Ghidra 验证**：提供 Windows 验收脚本，覆盖缓存恢复、双 DLL 切换、选定分析结果比较以及错误恢复等场景。脚本和覆盖边界见[验证说明](docs/windows/checkpoints.md#run-and-verify)。
 
-保留的会话会占用额外进程、内存和 Checkpoint 租约；最多两个 Ghidra 客户端不等于固定内存上限。不同 REA 进程不能同时持有同一目标的独占租约。Windows Checkpoint 会话的数据库编辑能力仍受限制，原始可执行文件不会因分析而被改写。
+保留的会话会占用额外进程、内存和 Checkpoint 租约；目标数量上限不等于固定内存上限。不同 REA 进程不能同时持有同一目标的独占租约。Windows Checkpoint 会话的数据库编辑能力仍受限制，原始可执行文件不会因分析而被改写。
 
 实现细节、资源代价及性能数据的适用范围见 [DearJIAN 的详细笔记](DearJIAN-docs/windows-checkpoint-optimization.md)。
 

@@ -188,8 +188,8 @@ export class BinarySession
   implements BinarySessionPort
 {
   #active: SessionBinding | undefined;
-  /** At most one read-only provider session is retained for a target switch. */
-  #parked: SessionBinding | undefined;
+  /** Oldest first; active plus parked never exceed the configured limit. */
+  #parked: SessionBinding[] = [];
   #externalMutationCleanupFailure: AnalysisError | undefined;
   #lastCloseCleanupFailure: AnalysisError | undefined;
   #pendingCleanup:
@@ -218,6 +218,7 @@ export class BinarySession
     providerRouter: SessionProviderRouter,
     records: InvestigationRecords = new InvestigationRecords(),
     bundleResourceFactory?: BundleResourceClientFactory,
+    readonly retainedTargetLimit: 2 | 3 | 4 | 5 = 2,
   ) {
     super(records);
     this.#providerRouter = providerRouter;
@@ -620,25 +621,23 @@ export class BinarySession
         route.binding.targetSwitchExclusionKey &&
       options.snapshot === undefined;
     const eligible = canRetainPrevious();
-    const parked = this.#parked;
-    const parkedMatches =
-      eligible &&
-      parked !== undefined &&
-      sameSessionTarget(parked.target, target) &&
-      parked.profile !== null &&
-      profile !== null &&
-      analysisProfilesEqual(parked.profile, profile);
-    if (
-      parkedMatches &&
-      parked !== undefined &&
-      previous !== undefined &&
-      profile !== null
-    ) {
+    const parkedIndex = eligible
+      ? this.#parked.findIndex(
+          (binding) =>
+            sameSessionTarget(binding.target, target) &&
+            binding.profile !== null &&
+            profile !== null &&
+            analysisProfilesEqual(binding.profile, profile),
+        )
+      : -1;
+    const parked = this.#parked[parkedIndex];
+    if (parked !== undefined && previous !== undefined && profile !== null) {
       const live = await this.#retainedClientLive(parked.client, options);
       if (isAborted(options.signal))
         return err(cancelledBy("open_binary", options.signal));
       if (live) {
-        this.#parked = previous;
+        this.#parked.splice(parkedIndex, 1);
+        this.#parked.push(previous);
         this.#active = {
           ...parked,
           target,
@@ -652,11 +651,24 @@ export class BinarySession
         return ok(target);
       }
     }
-    // Evict the previous standby before admitting another process. A failed
-    // close retains its cleanup owner and leaves the active session intact.
-    if (parked !== undefined) {
-      this.#parked = undefined;
-      const closed = await this.#retireClient(parked);
+    // Release conflicting leases first, then the least recently used clients.
+    // A failed retirement remains owned by #pendingCleanup and blocks admission.
+    while (this.#parked.length > 0) {
+      const conflict = this.#parked.findIndex(
+        (binding) =>
+          binding.route.binding?.targetSwitchExclusionKey ===
+          route.binding?.targetSwitchExclusionKey,
+      );
+      if (
+        canRetainPrevious() &&
+        conflict === -1 &&
+        this.#parked.length < this.retainedTargetLimit - 1
+      )
+        break;
+      const index = conflict === -1 ? 0 : conflict;
+      const [retired] = this.#parked.splice(index, 1);
+      if (retired === undefined) break;
+      const closed = await this.#retireClient(retired);
       if (!closed.ok)
         return isAborted(options.signal)
           ? err(
@@ -689,7 +701,7 @@ export class BinarySession
     }
     this.#active = undefined;
     if (canRetainPrevious() && previous !== undefined) {
-      this.#parked = previous;
+      this.#parked.push(previous);
     } else if (previous !== undefined) {
       const closed = await this.#retireClient(previous);
       if (!closed.ok) {
@@ -715,7 +727,7 @@ export class BinarySession
           cancelledBy("open_binary", options.signal),
         ),
       );
-    if (previous !== undefined && this.#parked !== previous) {
+    if (previous !== undefined && !this.#parked.includes(previous)) {
       const refreshed = await this.#providerRouter.refreshAfterRetirement(
         route,
         target,
@@ -1053,9 +1065,9 @@ export class BinarySession
         return err(this.#externalMutationCleanupFailure);
       const pending = await this.#retryPendingCleanup();
       if (!pending.ok) return pending;
-      if (this.#parked !== undefined) {
-        const parked = this.#parked;
-        this.#parked = undefined;
+      while (this.#parked.length > 0) {
+        const parked = this.#parked.shift();
+        if (parked === undefined) break;
         const closed = await this.#retireClient(parked);
         if (!closed.ok)
           return isAborted(options.signal)
@@ -1152,7 +1164,7 @@ export class BinarySession
   #retainsCloseCleanup(): boolean {
     return (
       this.#pendingCleanup !== undefined ||
-      (this.#parked !== undefined && this.#active === undefined) ||
+      (this.#parked.length > 0 && this.#active === undefined) ||
       this.#pendingBundleResourceCleanup.length > 0 ||
       this.hasPendingFileResources ||
       this.#providerRouter.hasPendingOwnedResources()
@@ -1205,9 +1217,9 @@ export class BinarySession
     // Do not overwrite a failed active cleanup owner. A later close retries it
     // before retiring the standby, whose ownership stays in #parked.
     let parkedClosed: Result<null, AnalysisError> = ok(null);
-    if (closed.ok && this.#parked !== undefined) {
-      const parked = this.#parked;
-      this.#parked = undefined;
+    while (closed.ok && parkedClosed.ok && this.#parked.length > 0) {
+      const parked = this.#parked.shift();
+      if (parked === undefined) break;
       parkedClosed = await this.#retireClient(parked, {
         ...(options.progress === undefined
           ? {}
@@ -1839,9 +1851,10 @@ export class BinarySession
     previous: SessionBinding | undefined,
   ): Promise<Result<null, AnalysisError>> {
     if (previous === undefined) return ok(null);
-    if (this.#parked === previous) {
+    const parkedIndex = this.#parked.indexOf(previous);
+    if (parkedIndex !== -1) {
       const live = await this.#retainedClientLive(previous.client, {});
-      this.#parked = undefined;
+      this.#parked.splice(parkedIndex, 1);
       if (live) {
         this.#active = previous;
         this.#clearRuntimeAvailability();
