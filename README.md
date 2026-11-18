@@ -10,9 +10,18 @@
 - [Windows Ghidra 优化的实现、测试与性能记录](docs/windows/checkpoints.md)
 - [DearJIAN 的 Windows 优化变更记录](DearJIAN-docs/WINDOWS_CHANGELOG.md)
 - [Checkpoint 与优化原理详解](DearJIAN-docs/windows-checkpoint-optimization.md)
+- [auto 自动模式：规则、原理和本机验证](DearJIAN-docs/auto-memory-retention.md)
 - [REA 安装与配置](docs/getting-started/installation.md) · [MCP 工具目录](docs/reference/mcp-contracts.md#generated-catalog)
 
 本优化版的后续笔记与变更记录统一保存在 [DearJIAN-docs 文件夹](DearJIAN-docs/)。
+
+## auto 自动模式与默认值
+
+**本机状态（2026-11-18）：** 作者的 Windows 用户环境和 Codex REA 启动配置均已设置 `REA_GHIDRA_RETAINED_TARGETS=auto`，因此读取这些配置的新全局 REA 进程默认采用自动模式。已经运行的旧进程需要重新连接或重启才能读取新代码和配置。其他机器不会因克隆本仓库自动获得该设置；**项目未配置时的默认容量仍是 2**。
+
+`auto` 不设固定目标数量上限，也不会自己寻找或分析文件。你提出任务后，AI 选择文件并调用 REA；REA 在符合条件的 Windows 只读 Ghidra Checkpoint 会话中按需保留目标。整机物理内存占用达到 **90%**，或后台目标闲置 **30 分钟**时，REA 优先释放最久未使用的后台目标；当前目标不会被后台维护主动关闭。检查在切换目标时和有后台目标时约每 30 秒进行，忙碌时会等待，因而 90% 是回收触发线，不是硬上限。内存读数不可用时，新保留目标会保守回退至总容量 2。
+
+完整触发流程、涉及的代码文件、失败处理以及本机全局测试见 [auto 自动模式的详细原理](DearJIAN-docs/auto-memory-retention.md)。
 
 ## Checkpoint 是什么？
 
@@ -59,9 +68,10 @@ tool_timeout_sec = 450
 GHIDRA_INSTALL_DIR = 'D:\TOOLS\ghidra\ghidra_12.1.4_PUBLIC'
 REA_GHIDRA_JAVA_HOME = 'D:\TOOLS\jdk\jdk-21.0.13+9'
 REA_GHIDRA_CHECKPOINT_DIR = 'D:\rea-checkpoints'
+REA_GHIDRA_RETAINED_TARGETS = 'auto'
 ```
 
-修改前先备份配置；如果已有 REA 配置，可先保留并用上面的独立名称测试。完成后重启或重新连接 Codex，使新的 MCP 配置生效。其他客户端的配置方式见 [MCP 客户端配置](docs/getting-started/client-configuration.md)和 [Trae 配置示例](docs/windows/checkpoints.md#connecting-trae-cn-manual-opt-in)。不同 REA 进程不能同时持有同一目标的 Checkpoint 租约，因此测试另一服务前先关闭正在使用该目标的会话。
+此示例显式启用 `auto`；如果删除该行且启动环境也没有设置这一变量，项目默认容量为 2。修改前先备份配置；如果已有 REA 配置，可先保留并用上面的独立名称测试。完成后重启或重新连接 Codex，使新的 MCP 配置生效。其他客户端的配置方式见 [MCP 客户端配置](docs/getting-started/client-configuration.md)和 [Trae 配置示例](docs/windows/checkpoints.md#connecting-trae-cn-manual-opt-in)。不同 REA 进程不能同时持有同一目标的 Checkpoint 租约，因此测试另一服务前先关闭正在使用该目标的会话。
 
 ### 3. 分析并确认优化生效
 
@@ -70,6 +80,8 @@ REA_GHIDRA_CHECKPOINT_DIR = 'D:\rea-checkpoints'
 在同一 REA 会话内分析已处理的 A、B 后切回 A，可以体验符合条件的会话复用；它与重启后的磁盘 Checkpoint 恢复是两个不同场景。测试完成后关闭分析会话。恢复依赖目标内容和分析配置匹配，其他限制和排错方法见 [Windows Checkpoint 说明](docs/windows/checkpoints.md)。
 
 默认最多同时保留 2 个目标（包括当前目标）。可在 MCP 服务的环境配置中将 `REA_GHIDRA_RETAINED_TARGETS` 设置为 `'3'`、`'4'`、`'5'`，或使用 `'auto'` 自动模式，然后重新连接服务。自动模式不设固定目标数量上限：符合条件的目标按需保留，后台目标闲置 30 分钟或整机物理内存占用达到 90% 时按最久未使用顺序释放。当前目标不会因自动回收被关闭；采样有延迟，90% 不是内存硬上限。更多进程仍会消耗内存并持有各自的 Checkpoint 租约。详见[配置与生命周期](docs/windows/checkpoints.md#reusing-a-loaded-target)。
+
+其中内存占用怎么算、何时检查、压力解除后如何恢复，见 [auto 的触发规则和实现](DearJIAN-docs/auto-memory-retention.md#触发规则)。
 
 3～5 个真实 DLL 的切换与资源实测见 [DearJIAN 的测试记录](DearJIAN-docs/multi-target-pool-results.md)。
 
@@ -115,5 +127,7 @@ REA_GHIDRA_CHECKPOINT_DIR = 'D:\rea-checkpoints'
 保留的会话会占用额外进程、内存和 Checkpoint 租约；目标数量上限不等于固定内存上限。不同 REA 进程不能同时持有同一目标的独占租约。Windows Checkpoint 会话的数据库编辑能力仍受限制，原始可执行文件不会因分析而被改写。
 
 实现细节、资源代价及性能数据的适用范围见 [DearJIAN 的详细笔记](DearJIAN-docs/windows-checkpoint-optimization.md)。
+
+自动模式相较固定容量的代码变化见 [auto 实现与涉及文件](DearJIAN-docs/auto-memory-retention.md#实现涉及哪些文件)。
 
 更多信息：[支持的客户端](docs/getting-started/installation.md#supported-agents) · [MCP 注册与配置](docs/getting-started/installation.md#mcp-registry) · [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-5c4ee5)](docs/reference/mcp-contracts.md#generated-catalog) · [原项目许可证](LICENSE)。
