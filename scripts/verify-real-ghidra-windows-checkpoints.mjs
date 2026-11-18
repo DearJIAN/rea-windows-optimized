@@ -10,7 +10,7 @@
 //     --checkpoint <dir>    checkpoint root (default: %TEMP%\rea-windows-checkpoints)
 //     --report <dir>        report directory (default: reports/windows-checkpoints)
 //     --scenarios a,b,c     subset of cold,restart,switch,same-sha,mutation,
-//                           corruption,concurrent,crash,mcp,pool-experiment
+//                           corruption,concurrent,crash,crash-pool,mcp,pool-experiment,alias-switch
 //     --probe <address>     function address in --binary (repeat for two probes)
 //     --probe-b <address>   function address in --binary-b
 import { execFileSync, spawn } from "node:child_process";
@@ -118,11 +118,13 @@ const validScenarios = new Set([
   "restart",
   "switch",
   "pool-experiment",
+  "alias-switch",
   "same-sha",
   "mutation",
   "corruption",
   "concurrent",
   "crash",
+  "crash-pool",
   "mcp",
 ]);
 if ([...SCENARIOS].some((item) => !validScenarios.has(item)))
@@ -132,7 +134,12 @@ if (
   !/^0x[0-9a-f]+$/i.test(PROBE_B)
 )
   throw new Error("Probe addresses must be hexadecimal (e.g. 0x10001000)");
-if ((SCENARIOS.has("switch") || SCENARIOS.has("pool-experiment")) && !BINARY_B)
+if (
+  (SCENARIOS.has("switch") ||
+    SCENARIOS.has("pool-experiment") ||
+    SCENARIOS.has("crash-pool")) &&
+  !BINARY_B
+)
   throw new Error("switch requires --binary-b and its --probe-b");
 if (WITHOUT_CHECKPOINT)
   throw new Error(
@@ -149,6 +156,10 @@ class Session {
 
   constructor(label) {
     this.label = label;
+  }
+
+  get pid() {
+    return this.#child?.pid;
   }
 
   async start(extraEnv = {}) {
@@ -480,6 +491,7 @@ const runSwitch = async (results) => {
       },
     );
     requireOk(firstProbe, "switch initial pseudo A");
+    const initialFingerprint = await fingerprint(session);
     const bOpened = await openBinary(session, "switch_open_b", BINARY_B);
     const bProbe = await session.call(
       "switch_pseudo_b",
@@ -502,7 +514,15 @@ const runSwitch = async (results) => {
     const returnDigest = normalize(aProbe.text);
     if (initialDigest !== returnDigest)
       throw new Error("A pseudocode changed across A/B/A switch");
+    const returnFingerprint = await fingerprint(session);
+    const equivalence = compareFingerprints(
+      initialFingerprint,
+      returnFingerprint,
+    );
+    if (!equivalence.equal)
+      throw new Error("A analysis fingerprint changed across A/B/A switch");
     results.switch = {
+      equivalence,
       initialAMs: firstOpened.ms + firstProbe.ms,
       initialDigest,
       returnDigest,
@@ -512,8 +532,14 @@ const runSwitch = async (results) => {
     };
   } finally {
     results.switchLog = session.stderr().slice(-300_000);
-    await session.call("switch_close", "close_binary", {});
-    await session.stop();
+    try {
+      requireOk(
+        await session.call("switch_close", "close_binary", {}),
+        "switch close",
+      );
+    } finally {
+      await session.stop();
+    }
   }
 };
 
@@ -558,6 +584,53 @@ const runPoolExperiment = async (results) => {
   } finally {
     await first.call("pool_close_a", "close_binary", {});
     await first.stop();
+  }
+};
+
+// The same checkpoint key must not be leased twice by two paths in one session.
+const runAliasSwitch = async (results) => {
+  if (!SCENARIOS.has("alias-switch")) return;
+  const fixture = await VerifierFixture.open({
+    prefix: "rea-alias-",
+    private: false,
+  });
+  const alias = join(fixture.path, "renamed.dll");
+  const session = new Session("alias-switch");
+  let started = false;
+  try {
+    await copyFile(BINARY, alias);
+    if ((await sha256File(alias)) !== (await sha256File(BINARY)))
+      throw new Error("alias bytes do not match the original target");
+    await session.start();
+    started = true;
+    await openBinary(session, "alias_open_original", BINARY);
+    const original = await session.call(
+      "alias_pseudo_original",
+      "procedure_pseudo_code",
+      { procedure: PROBE_FUNCTIONS[0] },
+    );
+    requireOk(original, "alias original pseudo");
+    const opened = await openBinary(session, "alias_open_copy", alias);
+    const copy = await session.call(
+      "alias_pseudo_copy",
+      "procedure_pseudo_code",
+      { procedure: PROBE_FUNCTIONS[0] },
+    );
+    requireOk(copy, "alias copy pseudo");
+    if (normalize(original.text) !== normalize(copy.text))
+      throw new Error("same-SHA alias changed pseudocode");
+    results.aliasSwitch = { restoreTotalMs: opened.ms + copy.ms, equal: true };
+  } finally {
+    try {
+      if (started)
+        requireOk(
+          await session.call("alias_close", "close_binary", {}),
+          "alias close",
+        );
+    } finally {
+      await session.stop();
+      await fixture.release();
+    }
   }
 };
 
@@ -761,6 +834,104 @@ const runCrash = async (results) => {
   }
 };
 
+// Record process identity for observation only. Never signal an observed PID.
+const windowsProcessSnapshot = () => {
+  const script =
+    "Get-CimInstance Win32_Process | Where-Object { $null -ne $_.CreationDate } | ForEach-Object { [PSCustomObject]@{ id=$_.ProcessId; parent=$_.ParentProcessId; name=$_.Name; created=$_.CreationDate.ToUniversalTime().ToString('o') } } | ConvertTo-Json -Compress";
+  return JSON.parse(
+    execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-Command", script],
+      { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 },
+    ),
+  );
+};
+const ownedFamily = (processes, root) => {
+  const ids = new Set([root]);
+  let count;
+  do {
+    count = ids.size;
+    for (const item of processes) if (ids.has(item.parent)) ids.add(item.id);
+  } while (count !== ids.size);
+  return processes.filter((item) => ids.has(item.id));
+};
+
+const runCrashPool = async (results) => {
+  if (!SCENARIOS.has("crash-pool")) return;
+  if (process.platform !== "win32")
+    throw new Error("crash-pool process identity check requires Windows");
+  const owner = new Session("crash-pool");
+  await owner.start();
+  try {
+    await openBinary(owner, "crash_pool_open_a", BINARY);
+    requireOk(
+      await owner.call("crash_pool_pseudo_a", "procedure_pseudo_code", {
+        procedure: PROBE_FUNCTIONS[0],
+      }),
+      "crash-pool A",
+    );
+    await openBinary(owner, "crash_pool_open_b", BINARY_B);
+    requireOk(
+      await owner.call("crash_pool_pseudo_b", "procedure_pseudo_code", {
+        procedure: PROBE_B,
+      }),
+      "crash-pool B",
+    );
+    const family = ownedFamily(windowsProcessSnapshot(), owner.pid);
+    if (
+      family.filter((item) => /^java(?:w)?\.exe$/i.test(item.name)).length < 2
+    )
+      throw new Error("could not observe both Ghidra JVMs before crash");
+    await owner.kill();
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 3000));
+    const current = windowsProcessSnapshot();
+    const survivors = family.filter((old) =>
+      current.some(
+        (item) => item.id === old.id && item.created === old.created,
+      ),
+    );
+    if (survivors.length)
+      throw new Error(
+        `owned processes survived MCP crash: ${JSON.stringify(survivors)}`,
+      );
+    const recovery = new Session("crash-pool-recovery");
+    await recovery.start();
+    try {
+      await openBinary(recovery, "crash_pool_recovery_a", BINARY);
+      requireOk(
+        await recovery.call(
+          "crash_pool_recovery_pseudo_a",
+          "procedure_pseudo_code",
+          { procedure: PROBE_FUNCTIONS[0] },
+        ),
+        "crash-pool recovery A",
+      );
+      await openBinary(recovery, "crash_pool_recovery_b", BINARY_B);
+      requireOk(
+        await recovery.call(
+          "crash_pool_recovery_pseudo_b",
+          "procedure_pseudo_code",
+          { procedure: PROBE_B },
+        ),
+        "crash-pool recovery B",
+      );
+      requireOk(
+        await recovery.call("crash_pool_recovery_close", "close_binary", {}),
+        "crash-pool recovery close",
+      );
+    } finally {
+      await recovery.stop();
+    }
+    results.crashPool = {
+      observedProcesses: family.length,
+      survivors: survivors.length,
+      recoveredBothTargets: true,
+    };
+  } finally {
+    await owner.stop();
+  }
+};
+
 const runMcp = async (results) => {
   if (!SCENARIOS.has("mcp")) return;
   const session = new Session("mcp");
@@ -841,11 +1012,13 @@ const main = async () => {
   await runRestart(results);
   await runSwitch(results);
   await runPoolExperiment(results);
+  await runAliasSwitch(results);
   await runSameSha(results);
   await runMutation(results);
   await runCorruption(results);
   await runConcurrent(results);
   await runCrash(results);
+  await runCrashPool(results);
   await runMcp(results);
 
   results.equivalence = {

@@ -248,6 +248,12 @@ export class CompositeProvider implements AnalysisProvider {
           .sort((left, right) =>
             compareUnicodeCodePoints(left.provider.id, right.provider.id),
           ),
+      canRetainOnTargetSwitch: () =>
+        !closed &&
+        profile !== undefined &&
+        [...clients.keys()].every(
+          (provider) => provider.identity().id === profile.provider.id,
+        ),
       reuseReadiness: () => {
         if (closed) return "blocked";
         const states = [...clients.values()].map(

@@ -87,6 +87,28 @@ specified existing root; equivalence is only checked when both cold and restart
 are selected. Crash recovery checks recovery after terminating the MCP process;
 it does not establish exactly which Ghidra startup stage had been reached.
 
+## Reusing a loaded target
+
+On Windows, a stock read-only Ghidra checkpoint session can keep one previous
+loaded target alive while another is active. Returning to the same target path,
+bytes and analysis profile reuses its live client after a health check; other
+providers and non-checkpoint sessions keep their existing lifecycle. This is a
+shared REA session behavior, independent of the MCP client; a new REA process
+still restores from the checkpoint. `close_binary`, runtime disposal and
+`reset_investigation` release the standby. Selecting a third target first evicts
+the standby; a failed cleanup is retained and must be retried. Target/profile
+changes or an unhealthy standby do not reuse it. Different paths sharing the
+same checkpoint key cannot hold its exclusive lease concurrently; the previous
+client is closed before opening that alias. If the current composite
+session has instantiated another provider, the switch closes that composite
+instead of retaining its other provider's resources.
+
+A standby keeps its Ghidra process, memory, private files and checkpoint lease
+until eviction or close. At most two Ghidra clients are owned by one REA session;
+this is a process-count bound, not a hard memory limit. A competing REA process
+cannot acquire a checkpoint while either of these clients owns its lease. Close
+the binary session to release both. The target executable is still read-only.
+
 ## Measuring target switching
 
 `--scenarios switch` runs A → B → A in one MCP session and checks the
@@ -94,7 +116,10 @@ normalized A pseudocode before and after the switch. `--scenarios
 pool-experiment` instead opens two independent MCP sessions, one per target,
 and queries the first again while both remain open. This second scenario is a
 measurement control, not a shared REA session or a production switch API.
-Both scenarios require `--binary-b` and the corresponding valid probes. Use a
+The `alias-switch` scenario tests a same-SHA path switch, and `crash-pool`
+checks process-family termination and lease recovery after killing the MCP
+owner with two loaded targets. The switch, pool and crash-pool scenarios require
+`--binary-b` and the corresponding valid probes. Use a
 previously populated checkpoint root to measure restoration rather than first
 analysis; cache directories and reports are retained.
 
@@ -106,6 +131,43 @@ not an `open_binary` switch and excludes orchestration. A single process-family
 working-set sample while both were running was approximately 1.4 GiB; it is not
 a peak measurement. These observations do not establish a production speedup,
 a complete memory bound, or stable latency across machines.
+
+### Retained-session comparison (2026-11-18)
+
+On the reference Windows 11 machine (i9-13900HX, Node 24.22.3, Ghidra
+12.1.4, Temurin JDK 21.0.13), a single warm-OS-cache A → B → A MCP task
+used the same prepopulated checkpoints and the same verifier on baseline
+`72eb7bd09` and the subsequent retained-session build. A was `vl3vpn.dll`
+(SHA-256 `166cbc188f25421654591ccb5feaa77806a92e45497212a93690f747c531223e`)
+and B was `ArrayVPNApi.dll` (SHA-256
+`f09252a67373480d910108ee53938978e8ff872394b0ad444cd7e983c2c90547`).
+The baseline checkout was on C: and the new checkout on D:; both used the
+same Ghidra installation, target files, checkpoint root and native addon.
+
+| Measurement                              |  Baseline |    Retained |
+| ---------------------------------------- | --------: | ----------: |
+| Open A again and decompile after B       |  26.364 s |     0.335 s |
+| Whole task elapsed                       |   86.65 s |     77.63 s |
+| Observed process-family CPU, lower bound |  114.38 s |    101.30 s |
+| Sampled process-family peak working set  | 723.1 MiB | 1,162.4 MiB |
+
+Sampling walked the process tree approximately every two seconds. Working-set
+sums include shared pages; the CPU sum uses the largest observation per process
+and can miss short-lived processes. Sampler CPU is excluded. This is one ordered
+pair, not a statistical guarantee; loading the first two Programs varied
+substantially, so it does not establish a stable whole-task speedup. Both runs
+returned matching selected function inventory, overview, symbols, instruction,
+reference, pseudocode and function-analysis fingerprints before and after the
+switch, and the corresponding fingerprints matched across runs. Coverage is
+limited to the selected probes and is not proof of complete analysis equivalence.
+
+A separate instrumented fresh-cache run measured 151.6 s for the first A
+analysis, 34.1 s for a new-process restore and 0.350 s to switch back after B.
+The restore missed the 15 s target under that load; no stable cross-process
+startup improvement is claimed. The run observed no survivors among 11 recorded
+owner-process identities after killing a session with two loaded targets, and
+both targets subsequently recovered. The target-switch cache stays local to its
+own REA session; it does not share live clients across processes.
 
 ## Enable, disable, clear
 

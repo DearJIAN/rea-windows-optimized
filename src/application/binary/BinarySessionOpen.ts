@@ -149,7 +149,7 @@ export const validateResolvedSessionTarget = (
   return { ok: true, value: { target, route, sameTarget } };
 };
 
-const sameSessionTarget = (
+export const sameSessionTarget = (
   current: BinaryTarget | undefined,
   target: BinaryTarget,
 ): boolean =>

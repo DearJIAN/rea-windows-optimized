@@ -100,6 +100,8 @@ export interface AnalysisProviderBinding {
   readonly releaseVerification?: ProviderReleaseVerification;
 
   readonly refreshAfterRetirement?: true;
+  readonly retainOnTargetSwitch?: true;
+  readonly targetSwitchExclusionKey?: string;
   readonly createClient?: AnalysisProviderBoundClientFactory;
   /** The provider's capabilities, attributed to its resolved identity. */
   readonly capabilities: readonly CapabilityDescriptor[];
@@ -873,6 +875,12 @@ const selectedResult = (
             releaseVerification: structuredClone(evaluated.releaseVerification),
           }),
 
+      ...(evaluated.retainOnTargetSwitch === true
+        ? { retainOnTargetSwitch: true as const }
+        : {}),
+      ...(evaluated.targetSwitchExclusionKey === undefined
+        ? {}
+        : { targetSwitchExclusionKey: evaluated.targetSwitchExclusionKey }),
       ...(evaluated.refreshAfterRetirement === undefined
         ? {}
         : { refreshAfterRetirement: evaluated.refreshAfterRetirement }),

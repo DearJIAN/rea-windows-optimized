@@ -71,6 +71,7 @@ import {
   resolveSessionOpen,
   resolveSessionTarget,
   validateResolvedSessionTarget,
+  sameSessionTarget,
   type BinarySessionOpenOptions,
   type ResolvedSessionOpen,
 } from "./BinarySessionOpen.js";
@@ -187,6 +188,8 @@ export class BinarySession
   implements BinarySessionPort
 {
   #active: SessionBinding | undefined;
+  /** At most one read-only provider session is retained for a target switch. */
+  #parked: SessionBinding | undefined;
   #externalMutationCleanupFailure: AnalysisError | undefined;
   #lastCloseCleanupFailure: AnalysisError | undefined;
   #pendingCleanup:
@@ -605,8 +608,89 @@ export class BinarySession
       if (fastPath !== undefined) return fastPath;
     }
     const previous = this.#active;
+    const canRetainPrevious = () =>
+      !sameTarget &&
+      previous !== undefined &&
+      previous.route.binding?.retainOnTargetSwitch === true &&
+      previous.client.canRetainOnTargetSwitch?.() === true &&
+      route.binding?.retainOnTargetSwitch === true &&
+      previous.route.binding.targetSwitchExclusionKey !== undefined &&
+      route.binding.targetSwitchExclusionKey !== undefined &&
+      previous.route.binding.targetSwitchExclusionKey !==
+        route.binding.targetSwitchExclusionKey &&
+      options.snapshot === undefined;
+    const eligible = canRetainPrevious();
+    const parked = this.#parked;
+    const parkedMatches =
+      eligible &&
+      parked !== undefined &&
+      sameSessionTarget(parked.target, target) &&
+      parked.profile !== null &&
+      profile !== null &&
+      analysisProfilesEqual(parked.profile, profile);
+    if (
+      parkedMatches &&
+      parked !== undefined &&
+      previous !== undefined &&
+      profile !== null
+    ) {
+      const live = await this.#retainedClientLive(parked.client, options);
+      if (isAborted(options.signal))
+        return err(cancelledBy("open_binary", options.signal));
+      if (live) {
+        this.#parked = previous;
+        this.#active = {
+          ...parked,
+          target,
+          route,
+          profile,
+          nativeSourceAdmitted: false,
+        };
+        this.#clearRuntimeAvailability();
+        this.resetSnapshotInvalidation();
+        this.selectSnapshot(target, profile);
+        return ok(target);
+      }
+    }
+    // Evict the previous standby before admitting another process. A failed
+    // close retains its cleanup owner and leaves the active session intact.
+    if (parked !== undefined) {
+      this.#parked = undefined;
+      const closed = await this.#retireClient(parked);
+      if (!closed.ok)
+        return isAborted(options.signal)
+          ? err(
+              analysisErrorWithCloseRejection(
+                cancelledBy("open_binary", options.signal),
+                closed.error,
+                "open_binary",
+              ),
+            )
+          : closed;
+      if (isAborted(options.signal))
+        return err(cancelledBy("open_binary", options.signal));
+      const refreshed = await this.#providerRouter.refreshAfterRetirement(
+        route,
+        target,
+        options.signal,
+      );
+      if (!refreshed.ok) return refreshed;
+      const admitted = validateResolvedSessionTarget({
+        target,
+        route: refreshed.value,
+        current: previous,
+        options,
+        stagedSnapshotMismatch: (target, profile) =>
+          this.snapshotMismatch(target, profile),
+      });
+      if (!admitted.ok) return admitted;
+      route = admitted.value.route;
+      profile = route.profile;
+    }
     this.#active = undefined;
-    if (previous !== undefined) {
+    if (canRetainPrevious() && previous !== undefined) {
+      this.#parked = previous;
+    } else if (previous !== undefined) {
       const closed = await this.#retireClient(previous);
       if (!closed.ok) {
         // A failed open retires the provider cache, not the investigation.
@@ -631,7 +715,7 @@ export class BinarySession
           cancelledBy("open_binary", options.signal),
         ),
       );
-    if (previous !== undefined) {
+    if (previous !== undefined && this.#parked !== previous) {
       const refreshed = await this.#providerRouter.refreshAfterRetirement(
         route,
         target,
@@ -969,6 +1053,23 @@ export class BinarySession
         return err(this.#externalMutationCleanupFailure);
       const pending = await this.#retryPendingCleanup();
       if (!pending.ok) return pending;
+      if (this.#parked !== undefined) {
+        const parked = this.#parked;
+        this.#parked = undefined;
+        const closed = await this.#retireClient(parked);
+        if (!closed.ok)
+          return isAborted(options.signal)
+            ? err(
+                analysisErrorWithCloseRejection(
+                  cancelledBy("reset_investigation", options.signal),
+                  closed.error,
+                  "reset_investigation",
+                ),
+              )
+            : closed;
+        if (isAborted(options.signal))
+          return err(cancelledBy("reset_investigation", options.signal));
+      }
       const bundles = await this.#retryPendingBundleResourceCleanup();
       if (!bundles.ok) return bundles;
       const files = await this.closeFileResources();
@@ -1051,6 +1152,7 @@ export class BinarySession
   #retainsCloseCleanup(): boolean {
     return (
       this.#pendingCleanup !== undefined ||
+      (this.#parked !== undefined && this.#active === undefined) ||
       this.#pendingBundleResourceCleanup.length > 0 ||
       this.hasPendingFileResources ||
       this.#providerRouter.hasPendingOwnedResources()
@@ -1063,6 +1165,16 @@ export class BinarySession
     },
     onCleanupFailure?: (failure: AnalysisError) => void,
   ): Promise<Result<null, AnalysisError>> {
+    // A failed standby eviction can coexist with an active target. Never
+    // replace that cleanup owner with the active client before retrying it.
+    if (this.#active !== undefined && this.#pendingCleanup !== undefined) {
+      const pending = await this.#retryPendingCleanup(
+        options.progress,
+        undefined,
+        onCleanupFailure,
+      );
+      if (!pending.ok) return pending;
+    }
     const previous = this.#active;
     const previousResources = this.#activeBundleResources;
     this.#active = undefined;
@@ -1090,6 +1202,19 @@ export class BinarySession
     this.clearEngineRecords();
     this.#clearRuntimeAvailability();
     const closed = await closing;
+    // Do not overwrite a failed active cleanup owner. A later close retries it
+    // before retiring the standby, whose ownership stays in #parked.
+    let parkedClosed: Result<null, AnalysisError> = ok(null);
+    if (closed.ok && this.#parked !== undefined) {
+      const parked = this.#parked;
+      this.#parked = undefined;
+      parkedClosed = await this.#retireClient(parked, {
+        ...(options.progress === undefined
+          ? {}
+          : { progress: options.progress }),
+        ...(onCleanupFailure === undefined ? {} : { onCleanupFailure }),
+      });
+    }
     const fileResources = await this.closeFileResources();
     if (!fileResources.ok) onCleanupFailure?.(fileResources.error);
     const candidateResources = await this.#providerRouter.closeOwnedResources();
@@ -1099,6 +1224,7 @@ export class BinarySession
       onCleanupFailure,
     );
     const resourceFailures = [
+      ...(parkedClosed.ok ? [] : [parkedClosed.error]),
       ...(bundleClosed.ok ? [] : [bundleClosed.error]),
       ...(fileResources.ok ? [] : [fileResources.error]),
       ...(candidateResources.ok ? [] : [candidateResources.error]),
@@ -1713,6 +1839,17 @@ export class BinarySession
     previous: SessionBinding | undefined,
   ): Promise<Result<null, AnalysisError>> {
     if (previous === undefined) return ok(null);
+    if (this.#parked === previous) {
+      const live = await this.#retainedClientLive(previous.client, {});
+      this.#parked = undefined;
+      if (live) {
+        this.#active = previous;
+        this.#clearRuntimeAvailability();
+        return ok(null);
+      }
+      const closed = await this.#retireClient(previous);
+      if (!closed.ok) return closed;
+    }
     const refreshed = await this.#providerRouter.refreshAfterRetirement(
       previous.route,
       previous.target,

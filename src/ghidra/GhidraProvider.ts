@@ -593,6 +593,14 @@ export class GhidraProvider implements AnalysisProviderCandidate {
       ...(checkpoint === undefined
         ? {}
         : { refreshAfterRetirement: true as const }),
+      ...(checkpoint !== undefined &&
+      installation.status === "available" &&
+      installation.platform === "win32"
+        ? {
+            retainOnTargetSwitch: true as const,
+            targetSwitchExclusionKey: checkpoint.directory,
+          }
+        : {}),
       profile:
         checkpoint === undefined
           ? baseProfile

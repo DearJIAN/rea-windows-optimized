@@ -2,10 +2,13 @@ name: Windows checkpoint
 
 on:
   push:
-    branches: [feat/windows-ghidra-checkpoint]
+    branches:
+      [feat/windows-ghidra-checkpoint, perf/windows-ghidra-session-reuse]
   pull_request:
     paths:
       - "src/ghidra/**"
+      - "src/application/binary/**"
+      - "src/ports/**"
       - "src/windows/**"
       - "src/config/**"
       - "bridge/ghidra/**"
@@ -36,4 +39,7 @@ jobs:
           npx vitest run
           src/windows/WindowsCheckpointDirectory.test.ts
           src/ghidra/GhidraCheckpoint.test.ts
+          src/application/binary/BinarySessionRetainedSwitch.test.ts
+          src/application/binary/BinarySessionRestoration.test.ts
+          src/application/binary/CompositeProvider.test.ts
           src/config.test.ts

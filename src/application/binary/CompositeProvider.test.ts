@@ -12,6 +12,7 @@ import { ProviderCleanupError } from "../../domain/providerCleanupError.js";
 import { projectAnalysisError } from "../../domain/analysisErrorProjection.js";
 import { err, ok } from "../../domain/result.js";
 import { CompositeProvider } from "./CompositeProvider.js";
+import { createAnalysisProfile } from "../../domain/analysisProfile.js";
 import { closeAnalysisClient } from "../../providers/AnalysisClientCleanup.js";
 import type { AnalysisError } from "../../domain/analysisErrorBase.js";
 
@@ -334,3 +335,21 @@ it.each([1, 2])(
     for (const child of children) expect(child.close).toHaveBeenCalledTimes(3);
   },
 );
+
+it("does not retain a composite with an instantiated auxiliary client", async () => {
+  const deep = failingProvider("deep", "address_name", "deep");
+  const auxiliary = failingProvider("auxiliary", "procedure_info", "auxiliary");
+  const profile = createAnalysisProfile(
+    { id: "deep", name: "deep", version: "1" },
+    {},
+  );
+  const client = new CompositeProvider([
+    deep.provider,
+    auxiliary.provider,
+  ]).createClient(executableTarget, profile);
+  expect(client.canRetainOnTargetSwitch?.()).toBe(true);
+  expect((await client.execute("address_name", {})).ok).toBe(true);
+  expect(client.canRetainOnTargetSwitch?.()).toBe(true);
+  expect((await client.execute("procedure_info", {})).ok).toBe(true);
+  expect(client.canRetainOnTargetSwitch?.()).toBe(false);
+});

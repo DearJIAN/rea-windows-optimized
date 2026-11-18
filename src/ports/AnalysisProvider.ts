@@ -258,6 +258,8 @@ export interface AnalysisClient extends AnalysisOperationPort {
   requestActivitySnapshots?(): readonly ProviderRequestActivitySnapshot[];
   /** Local reuse admission is separate from observed native process health. */
   reuseReadiness?(): "ready" | "blocked" | "unknown";
+  /** True only while all owned child clients permit target-switch retention. */
+  canRetainOnTargetSwitch?(): boolean;
   /** Current operational health for the active provider bridge. */
   operationHealthSnapshot?(): ProviderOperationHealth | undefined;
   /** Close owned resources and retain failed cleanup for a later retry. */
@@ -299,6 +301,11 @@ export interface AnalysisProfileResolution {
   readonly profile: AnalysisProfileCommitment | null;
   /** Readiness fact for the resolved selection; omitted means not reported. */
   readonly releaseVerification?: ProviderReleaseVerification;
+
+  /** Provider permits its read-only client to stay alive across target switches. */
+  readonly retainOnTargetSwitch?: true;
+  /** Sessions with the same exclusive resource key cannot coexist. */
+  readonly targetSwitchExclusionKey?: string;
 
   /** Closing a client can publish state that invalidates a previewed profile. */
   readonly refreshAfterRetirement?: true;

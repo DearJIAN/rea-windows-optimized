@@ -34,6 +34,8 @@ export interface AnalysisProviderCandidateEvaluation {
   readonly status: AnalysisProviderCandidateStatus;
   readonly profile?: AnalysisProfileCommitment;
   readonly refreshAfterRetirement?: true;
+  readonly retainOnTargetSwitch?: true;
+  readonly targetSwitchExclusionKey?: string;
   readonly createClient?: AnalysisProviderBoundClientFactory;
   readonly releaseVerification?: ProviderReleaseVerification;
   readonly profileError?: AnalysisError;
@@ -142,6 +144,13 @@ export const evaluateAnalysisProviderCandidate = async (
             releaseVerification: verification.data,
           }),
 
+      ...(resolved.value.retainOnTargetSwitch === true
+        ? { retainOnTargetSwitch: true as const }
+        : {}),
+      ...(typeof resolved.value.targetSwitchExclusionKey === "string" &&
+      resolved.value.targetSwitchExclusionKey.length > 0
+        ? { targetSwitchExclusionKey: resolved.value.targetSwitchExclusionKey }
+        : {}),
       ...(resolved.value.refreshAfterRetirement === undefined
         ? {}
         : { refreshAfterRetirement: resolved.value.refreshAfterRetirement }),
