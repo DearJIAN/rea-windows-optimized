@@ -8,8 +8,15 @@
 - [查看原 README（英文，保留的原始版本）](README.original.md)
 - [查看原 README 中文版](docs/readme/README_zh.md)
 - [Windows Ghidra 优化的实现、测试与性能记录](docs/windows/checkpoints.md)
-- [本优化版变更记录](WINDOWS_CHANGELOG.md)
+- [DearJIAN 的 Windows 优化变更记录](DearJIAN/WINDOWS_CHANGELOG.md)
+- [Checkpoint 与优化原理详解](DearJIAN/windows-checkpoint-optimization.md)
 - [REA 安装与配置](docs/getting-started/installation.md) · [MCP 工具目录](docs/reference/mcp-contracts.md#generated-catalog)
+
+本优化版的后续笔记与变更记录统一保存在 [DearJIAN 文件夹](DearJIAN/)。
+
+## Checkpoint 是什么？
+
+Checkpoint（检查点）是 REA 保存的、已经完成 Ghidra 自动分析的 Program 快照。下次分析相同内容且配置匹配的目标时，REA 可以从磁盘恢复这份结果，避免重新执行自动分析；这不是对原 DLL 的修改，也不能从首次分析中途断点续跑。恢复仍需启动 Ghidra，因此并非瞬间完成。原版已有 Checkpoint 设计，本项目扩展了 Windows 支持，并另行优化同一会话内的目标切换。流程与限制见 [Checkpoint 和优化原理详解](DearJIAN/windows-checkpoint-optimization.md)。
 
 ## 快速开始：在 Windows 上使用优化版
 
@@ -62,11 +69,15 @@ REA_GHIDRA_CHECKPOINT_DIR = 'D:\rea-checkpoints'
 
 在同一 REA 会话内分析已处理的 A、B 后切回 A，可以体验符合条件的会话复用；它与重启后的磁盘 Checkpoint 恢复是两个不同场景。测试完成后关闭分析会话。恢复依赖目标内容和分析配置匹配，其他限制和排错方法见 [Windows Checkpoint 说明](docs/windows/checkpoints.md)。
 
+关于恢复与复用分别节省了哪些步骤，以及已有验证的范围，见[优化原理和验证证据](DearJIAN/windows-checkpoint-optimization.md#验证证据与局限)。
+
 ## 优化前后
 
 原始测试中，Windows 上切换已分析 DLL 后再次打开目标，可能需要重新启动 Ghidra 并重复分析；当 REA 进程结束后，内存中的分析状态也会消失。等待时间主要来自 Ghidra 的启动和自动分析，而不是每次查询本身。
 
 本项目为 Windows Ghidra 增加持久 Checkpoint 和同一会话内的目标复用：分析完成后保存可恢复的 Program，再次启动 REA 时可从磁盘恢复；同一会话在两个已分析目标间切换时，可保留上一个目标的 Ghidra 会话，切回时复用。
+
+这两种方式的适用条件和相较原版的变化，详见[优化原理与对照](DearJIAN/windows-checkpoint-optimization.md#相较原版改了什么)。
 
 以下是 2026-11-18 在 Windows 11 x64、Ghidra 12.1.4、JDK 21 和两个 DLL 样本上的实测，时间不是速度承诺：
 
@@ -98,5 +109,7 @@ REA_GHIDRA_CHECKPOINT_DIR = 'D:\rea-checkpoints'
 5. **真实 Ghidra 验证**：提供 Windows 验收脚本，覆盖缓存恢复、双 DLL 切换、选定分析结果比较以及错误恢复等场景。脚本和覆盖边界见[验证说明](docs/windows/checkpoints.md#run-and-verify)。
 
 保留的会话会占用额外进程、内存和 Checkpoint 租约；最多两个 Ghidra 客户端不等于固定内存上限。不同 REA 进程不能同时持有同一目标的独占租约。Windows Checkpoint 会话的数据库编辑能力仍受限制，原始可执行文件不会因分析而被改写。
+
+实现细节、资源代价及性能数据的适用范围见 [DearJIAN 的详细笔记](DearJIAN/windows-checkpoint-optimization.md)。
 
 更多信息：[支持的客户端](docs/getting-started/installation.md#supported-agents) · [MCP 注册与配置](docs/getting-started/installation.md#mcp-registry) · [![MCP tool catalog](https://img.shields.io/badge/MCP-tool_catalog-5c4ee5)](docs/reference/mcp-contracts.md#generated-catalog) · [原项目许可证](LICENSE)。
