@@ -100,7 +100,7 @@ it("validates the source before release creation and the prepared candidate befo
   }
 });
 
-it("keeps main pushes proposal-only and gates merged-release automation", async () => {
+it("requires opt-in for main release proposals and gates merged-release automation", async () => {
   const workflow = await readReleaseWorkflow();
   expect(workflow.on.push).toEqual({ branches: ["main"] });
   expect(workflow.on.pull_request).toMatchObject({
@@ -108,7 +108,9 @@ it("keeps main pushes proposal-only and gates merged-release automation", async 
     branches: ["main"],
   });
   const proposal = workflow.jobs["release-proposal"];
-  expect(proposal.if).toBe("github.event_name == 'push'");
+  expect(proposal.if).toBe(
+    "github.event_name == 'push' && vars.REA_ENABLE_RELEASE_PROPOSALS == 'true'",
+  );
   const controller = proposal.steps.find((step) =>
     step.run?.includes("scripts/release-proposal.mjs"),
   );
