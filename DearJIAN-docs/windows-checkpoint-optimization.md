@@ -112,7 +112,7 @@ REA 使用目标内容及影响分析结果的配置区分快照；内容或配�
 
 ## 固定快照的完整文件清单
 
-以下由上述两个提交的 `git diff --name-status` 生成，A = 新增，M = 修改，D = 删除。历史路径按优化端快照记载；之后 `WINDOWS_CHANGELOG.md` 已移到 `DearJIAN/`。这份清单包含文档和仓库维护变更，不表示每个文件都是移植功能所必需。
+以下由上述两个提交的 `git diff --name-status` 生成，A = 新增，M = 修改，D = 删除。历史路径按优化端快照记载；之后 `WINDOWS_CHANGELOG.md` 已移到 `DearJIAN-docs/`。这份清单包含文档和仓库维护变更，不表示每个文件都是移植功能所必需。
 
 - **M** `.agents/skills/reverse-engineer-anything/references/native-and-artifacts.md`
 - **M** `.cursor-plugin/skills/reverse-engineer-anything/references/native-and-artifacts.md`
