@@ -527,11 +527,14 @@ const runConcurrent = async (results) => {
     results.concurrent = {
       firstMs: a.ms + aAnalysis.ms,
       firstError: aAnalysis.isError,
+      firstMessage: aAnalysis.isError
+        ? (aAnalysis.error ?? aAnalysis.text).slice(0, 300)
+        : "first session owns the lease",
       secondMs: b.ms + bAnalysis.ms,
       secondError: bAnalysis.isError,
       secondMessage: bAnalysis.isError
         ? (bAnalysis.error ?? bAnalysis.text).slice(0, 300)
-        : "second session shared the cache",
+        : "second session owns the lease",
     };
   } finally {
     await first.stop();
