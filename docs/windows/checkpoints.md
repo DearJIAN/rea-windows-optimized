@@ -87,6 +87,26 @@ specified existing root; equivalence is only checked when both cold and restart
 are selected. Crash recovery checks recovery after terminating the MCP process;
 it does not establish exactly which Ghidra startup stage had been reached.
 
+## Measuring target switching
+
+`--scenarios switch` runs A → B → A in one MCP session and checks the
+normalized A pseudocode before and after the switch. `--scenarios
+pool-experiment` instead opens two independent MCP sessions, one per target,
+and queries the first again while both remain open. This second scenario is a
+measurement control, not a shared REA session or a production switch API.
+Both scenarios require `--binary-b` and the corresponding valid probes. Use a
+previously populated checkpoint root to measure restoration rather than first
+analysis; cache directories and reports are retained.
+
+On the reference Windows machine, one 2026-11-18 run on `bef872c04` with this
+measurement harness reported 13.0 s for A's initial load and 11.25 s to return
+to A in a single session. An independent-session control reported 12.55 s and
+12.50 s to load A and B, then 16 ms for another A query. The latter timing is
+not an `open_binary` switch and excludes orchestration. A single process-family
+working-set sample while both were running was approximately 1.4 GiB; it is not
+a peak measurement. These observations do not establish a production speedup,
+a complete memory bound, or stable latency across machines.
+
 ## Enable, disable, clear
 
 - Enable: set `REA_GHIDRA_CHECKPOINT_DIR` in the environment that launches REA,

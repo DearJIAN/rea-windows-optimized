@@ -10,7 +10,7 @@
 //     --checkpoint <dir>    checkpoint root (default: %TEMP%\rea-windows-checkpoints)
 //     --report <dir>        report directory (default: reports/windows-checkpoints)
 //     --scenarios a,b,c     subset of cold,restart,switch,same-sha,mutation,
-//                           corruption,concurrent,crash,mcp
+//                           corruption,concurrent,crash,mcp,pool-experiment
 //     --probe <address>     function address in --binary (repeat for two probes)
 //     --probe-b <address>   function address in --binary-b
 import { execFileSync, spawn } from "node:child_process";
@@ -117,6 +117,7 @@ const validScenarios = new Set([
   "cold",
   "restart",
   "switch",
+  "pool-experiment",
   "same-sha",
   "mutation",
   "corruption",
@@ -131,7 +132,7 @@ if (
   !/^0x[0-9a-f]+$/i.test(PROBE_B)
 )
   throw new Error("Probe addresses must be hexadecimal (e.g. 0x10001000)");
-if (SCENARIOS.has("switch") && !BINARY_B)
+if ((SCENARIOS.has("switch") || SCENARIOS.has("pool-experiment")) && !BINARY_B)
   throw new Error("switch requires --binary-b and its --probe-b");
 if (WITHOUT_CHECKPOINT)
   throw new Error(
@@ -466,6 +467,19 @@ const runSwitch = async (results) => {
   const session = new Session("switch");
   await session.start();
   try {
+    const firstOpened = await openBinary(
+      session,
+      "switch_open_a_initial",
+      BINARY,
+    );
+    const firstProbe = await session.call(
+      "switch_pseudo_a_initial",
+      "procedure_pseudo_code",
+      {
+        procedure: PROBE_FUNCTIONS[0],
+      },
+    );
+    requireOk(firstProbe, "switch initial pseudo A");
     const bOpened = await openBinary(session, "switch_open_b", BINARY_B);
     const bProbe = await session.call(
       "switch_pseudo_b",
@@ -484,14 +498,66 @@ const runSwitch = async (results) => {
       },
     );
     requireOk(aProbe, "switch pseudo");
+    const initialDigest = normalize(firstProbe.text);
+    const returnDigest = normalize(aProbe.text);
+    if (initialDigest !== returnDigest)
+      throw new Error("A pseudocode changed across A/B/A switch");
     results.switch = {
+      initialAMs: firstOpened.ms + firstProbe.ms,
+      initialDigest,
+      returnDigest,
       openBMs: bOpened.ms,
       analyseBMs: bProbe.ms,
       backToAMs: aOpened.ms + aProbe.ms,
     };
   } finally {
+    results.switchLog = session.stderr().slice(-300_000);
     await session.call("switch_close", "close_binary", {});
     await session.stop();
+  }
+};
+
+// Measurement control: independent MCP runtimes, not a production session pool.
+const runPoolExperiment = async (results) => {
+  if (!SCENARIOS.has("pool-experiment")) return;
+  const first = new Session("pool-a");
+  const second = new Session("pool-b");
+  await first.start();
+  try {
+    await second.start();
+    try {
+      const aOpen = await openBinary(first, "pool_open_a", BINARY);
+      const a = await first.call("pool_pseudo_a", "procedure_pseudo_code", {
+        procedure: PROBE_FUNCTIONS[0],
+      });
+      requireOk(a, "pool initial pseudo A");
+      const bOpen = await openBinary(second, "pool_open_b", BINARY_B);
+      const b = await second.call("pool_pseudo_b", "procedure_pseudo_code", {
+        procedure: PROBE_B,
+      });
+      requireOk(b, "pool pseudo B");
+      const again = await first.call(
+        "pool_pseudo_a_again",
+        "procedure_pseudo_code",
+        { procedure: PROBE_FUNCTIONS[0] },
+      );
+      requireOk(again, "pool return pseudo A");
+      if (normalize(a.text) !== normalize(again.text))
+        throw new Error("A pseudocode changed in independent sessions");
+      results.poolExperiment = {
+        initialAMs: aOpen.ms + a.ms,
+        initialBMs: bOpen.ms + b.ms,
+        returnQueryMs: again.ms,
+        digest: normalize(again.text),
+        note: "Independent MCP runtimes; does not include a production target-switch operation.",
+      };
+    } finally {
+      await second.call("pool_close_b", "close_binary", {});
+      await second.stop();
+    }
+  } finally {
+    await first.call("pool_close_a", "close_binary", {});
+    await first.stop();
   }
 };
 
@@ -774,6 +840,7 @@ const main = async () => {
   await runCold(targetSha, results);
   await runRestart(results);
   await runSwitch(results);
+  await runPoolExperiment(results);
   await runSameSha(results);
   await runMutation(results);
   await runCorruption(results);
