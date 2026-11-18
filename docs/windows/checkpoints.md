@@ -96,6 +96,31 @@ address digest from `list_procedures`. Envelope fields that legitimately change
 between fresh analysis and restore (evidence ids, links, checkpoint caveats) are
 excluded; pseudocode is not compared by length or raw text.
 
+## Measured on the reference machine
+
+Windows 11 x64, i9-13900HX (24C/32T), 39.8 GB RAM, NVMe, Ghidra 12.1.4,
+JDK 21.0.13, target `vl3vpn.dll` (1,144,896 bytes, 3,635 functions):
+
+| Scenario                                      | Wall clock                                               |
+| --------------------------------------------- | -------------------------------------------------------- |
+| First analysis (cold, creates the checkpoint) | 75–97 s                                                  |
+| New REA process, same target                  | 13.3–21.1 s                                              |
+| Same SHA-256 at another path                  | 13.3–21.1 s                                              |
+| Open another DLL, then return                 | 14.4–18.7 s                                              |
+| Mutation of one byte                          | full cold analysis, separate cache key                   |
+| Damaged `.gzf`                                | quarantined, then full cold analysis                     |
+| Competing second REA process                  | first owner keeps the lease, second tool call reports it |
+
+Restore breakdown from the debug timings: checkpoint admission 0.9 s (ACL probe
+and digest verification), process spawn 0.3 s, Ghidra headless startup + bridge
+script + `.gzf` import 14–17 s, first decompile afterwards 0.1–1.5 s. The 15 s
+target is met on fast runs but not consistently; the dominant cost is Ghidra's
+own headless startup and bridge initialisation, not REA's request handling.
+
+Equivalence for the same target: identical function count (3,635), identical
+sorted entry-address digest, and identical `normalized_result` payloads for
+`binary_overview`, the probed `xrefs` addresses and the probed pseudocode.
+
 ## Sync upstream and roll back
 
 ```powershell
