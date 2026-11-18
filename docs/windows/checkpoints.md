@@ -121,6 +121,32 @@ Equivalence for the same target: identical function count (3,635), identical
 sorted entry-address digest, and identical `normalized_result` payloads for
 `binary_overview`, the probed `xrefs` addresses and the probed pseudocode.
 
+## Connecting Trae CN (manual, opt-in)
+
+Do not replace the installed `rea-agents` package or edit a working MCP entry in
+place. Register the checkout as a second, clearly named server and keep the old
+one until the fork has been exercised:
+
+```jsonc
+{
+  "mcpServers": {
+    "rea-windows-optimized": {
+      "command": "node",
+      "args": ["D:\\TOOLS\\rea-windows-optimized\\scripts\\rea.mjs", "--mcp"],
+      "env": {
+        "GHIDRA_INSTALL_DIR": "D:\\TOOLS\\ghidra\\ghidra_12.1.4_PUBLIC",
+        "JAVA_HOME": "D:\\TOOLS\\jdk\\jdk-21.0.13+9",
+        "REA_GHIDRA_CHECKPOINT_DIR": "D:\\rea-checkpoints",
+      },
+    },
+  },
+}
+```
+
+Restart the client after editing `mcp.json`, then verify with a harmless call
+(`list_providers`, `open_binary`, one decompile). Roll back by deleting the
+entry; the globally installed REA 6.7.0 entry is untouched.
+
 ## Sync upstream and roll back
 
 ```powershell
