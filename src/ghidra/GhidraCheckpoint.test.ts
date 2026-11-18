@@ -520,6 +520,28 @@ it.skipIf(process.platform === "win32")(
   },
 );
 
+it("separates cache keys by target digest and analysis profile", async () => {
+  const f = await fixture();
+  const otherTarget = await resolveGhidraCheckpoint(
+    f.root,
+    "2".repeat(64),
+    profile,
+    f.resources,
+  );
+  expect(otherTarget.directory).not.toBe(f.selection.directory);
+  const newerGhidra = createAnalysisProfile(
+    { id: "ghidra", name: "Ghidra", version: "12.2.0" },
+    { import_mode: "test" },
+  );
+  const otherProfile = await resolveGhidraCheckpoint(
+    f.root,
+    target,
+    newerGhidra,
+    f.resources,
+  );
+  expect(otherProfile.directory).not.toBe(f.selection.directory);
+});
+
 it.skipIf(process.platform !== "win32")(
   "hardens its Windows cache directory and restores the published Program for a new owner",
   async () => {
