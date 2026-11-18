@@ -29,9 +29,9 @@ Checkpoint（检查点）是 REA 保存的、已经完成 Ghidra 自动分析的
 
 ## 快速开始：在 Windows 上使用优化版
 
-下面以 **Windows x64 和 Codex** 为例，从本仓库源码构建并接入；Trae 等其他 MCP 客户端也可指向同一份构建产物。仓库公开前，克隆需要有仓库访问权限。不要用 `npm install -g rea-agents` 代替下面的构建步骤：该命令安装 npm 上的包，不保证包含本仓库的优化。
+下面以 **Windows x64 和 Codex** 为例，从本仓库源码构建并接入；Trae 等其他 MCP 客户端也可指向同一份构建产物。克隆需要网络连接；如果使用的仓库是私有仓库，还需要相应访问权限。不要用 `npm install -g rea-agents` 代替下面的构建步骤：该命令安装 npm 上的包，不保证包含本仓库的优化。
 
-> **路径示例，请先替换再执行：**下面的 `D:\TOOLS\...`、`C:\msys64\...` 和 Node.js 路径是作者环境的示例；`D:\rea-checkpoints` 是演示用缓存目录，并非必须使用的路径。它们不会自动适配你的电脑。请先确认自己的安装位置和可用目录，再同时修改构建命令与 Codex 配置中的对应路径；不要在已有重要数据的目录上盲目操作。
+> **下面的路径是作者 DearJIAN 的本机示例，不是你的电脑路径。不要直接复制执行！** `D:\TOOLS\...`、`C:\msys64\...`、`C:\Windows\System32` 和 Node.js 路径来自作者环境；`D:\rea-checkpoints` 是为了演示而填写的缓存路径，不是作者当前全局缓存路径。它们不会自动适配你的电脑。请先确认本机位置，将示例换成自己的真实路径；若本机某项路径恰好相同，可以保留。构建命令和 Codex 配置中指向同一位置的路径必须一起修改，不要覆盖已有数据。
 
 ### 让 AI 协助搭建（可复制）
 
@@ -43,21 +43,32 @@ Checkpoint（检查点）是 REA 保存的、已经完成 Ghidra 自动分析的
 
 ### 1. 准备并构建
 
-自行准备 Git、Node.js 24.22.1（见 [.nvmrc](.nvmrc)）、JDK 21、Ghidra 12.x，以及用于构建 Windows 原生组件的 MSYS2 UCRT64 MinGW 工具链。Ghidra 和 JDK 不由 REA 自动安装；具体要求见 [Windows 构建说明](docs/windows/checkpoints.md#build)。
+自行准备 Git、Node.js 24.22.1（见 [.nvmrc](.nvmrc)）、npm 11.16.0（见 `package.json` 的 `packageManager`）、JDK 21、Ghidra 12.x，以及用于构建 Windows 原生组件的 MSYS2 UCRT64 MinGW 工具链。Ghidra 和 JDK 不由 REA 自动安装；具体要求见 [Windows 构建说明](docs/windows/checkpoints.md#build)。
 
-下面是**作者环境的 PowerShell 示例**。其中仓库位置 `D:\TOOLS\rea-windows-optimized` 和 MSYS2 工具链位置 `C:\msys64\ucrt64\bin` 必须先核实并按自己的机器替换；克隆目标应是可用的新目录。确认目标目录和所需工具后再执行：
+**下面的 PowerShell 代码块是作者 DearJIAN 电脑上的路径示例，不是你的实际路径，不能直接照抄执行。**其中 `D:\TOOLS\rea-windows-optimized` 是示例仓库目录，`C:\msys64\ucrt64\bin`、`C:\msys64\usr\bin` 是示例 MSYS2 路径，`C:\Windows\System32` 是示例 Windows 系统目录；请逐项确认并按你的电脑修改。克隆目标应是可用的新目录。先用 `node --version` 和 `npm --version` 核对工具版本，并确认所需工具存在，再执行：
+
+全新克隆没有预生成 Windows 原生组件：**先构建并校验原生组件，再运行 `build:cached`**，否则运行时构建会因缺少原生组件而失败。依赖安装和原生组件构建还需要访问 npm 包源和 `nodejs.org`，请确保网络可用。
 
 ```powershell
+# 作者 DearJIAN 的路径示例：先按本机实际路径修改，再执行！
+& {
 git clone https://github.com/DearJIAN/rea-windows-optimized.git D:\TOOLS\rea-windows-optimized
-Set-Location D:\TOOLS\rea-windows-optimized
+if ($LASTEXITCODE -ne 0) { throw '克隆失败，请检查仓库权限和目标目录。' }
+Set-Location -LiteralPath 'D:\TOOLS\rea-windows-optimized' -ErrorAction Stop
 npm ci
-npm run build:cached
+if ($LASTEXITCODE -ne 0) { throw '依赖安装失败，请先检查错误。' }
 
 # 指向本机 MSYS2 UCRT64 工具链，再构建和验证 Windows 原生组件
 $env:PATH = 'C:\msys64\ucrt64\bin;C:\Windows\System32;C:\msys64\usr\bin;' + $env:PATH
 npm run build:windows-native
+if ($LASTEXITCODE -ne 0) { throw 'Windows 原生组件构建失败，请先检查工具链。' }
 npm run verify:windows-native:artifact
+if ($LASTEXITCODE -ne 0) { throw 'Windows 原生组件校验失败。' }
+npm run build:cached
+if ($LASTEXITCODE -ne 0) { throw 'REA 构建失败，请先检查错误。' }
 node scripts/rea.mjs --version
+if ($LASTEXITCODE -ne 0) { throw 'REA 入口检查失败。' }
+}
 ```
 
 最后的版本号仅确认入口可以运行，**不能单凭版本号区分优化版和原版**。后续客户端配置必须指向上面克隆目录中的 `scripts/rea.mjs`；保留该目录及构建产物。更新源码后需重新构建；原生组件的完整要求和验证方式以 [Windows 构建说明](docs/windows/checkpoints.md#build)为准。
@@ -66,9 +77,10 @@ node scripts/rea.mjs --version
 
 Codex 默认的用户配置文件是 `%USERPROFILE%\.codex\config.toml`；PowerShell 中可用 `Join-Path $env:USERPROFILE '.codex\config.toml'` 查看该路径。如果你为 Codex 指定了其他配置目录，请以实际配置为准。修改前先备份文件，保留原有配置和其他 MCP 服务；如果已有同名 `[mcp_servers.rea-windows-optimized]`，不要重复添加同名表，应检查并修改现有条目或选择不同的服务名。
 
-下面的 TOML 是**作者机器的接入示例，不是可直接套用到所有电脑的配置**。把每个路径换为自己的实际绝对路径，特别是 `args` 和 `cwd` 必须与第 1 步构建的仓库位置一致，且 `cwd` 目录必须存在：
+**下面的 TOML 代码块是作者 DearJIAN 电脑上的接入路径示例，不是你的实际配置，不能直接复制使用。**其中 `D:\rea-checkpoints` 为演示缓存路径。请先把每个路径换为自己电脑的实际绝对路径；如果恰好一致可保留。特别是 `args` 和 `cwd` 必须与第 1 步构建的仓库位置一致，且 `cwd` 目录必须存在：
 
 ```toml
+# 作者 DearJIAN 的路径示例：先按本机实际路径修改，再写入配置！
 [mcp_servers.rea-windows-optimized]
 command = 'C:\Program Files\nodejs\node.exe'
 args = ['D:\TOOLS\rea-windows-optimized\scripts\rea.mjs', 'mcp']

@@ -39,15 +39,17 @@ Windows authority artifact the MSYS2 UCRT64 MinGW toolchain
 
 ```powershell
 npm ci
-npm run compile
 # Rebuild the Node-API addon from this checkout's sources (not a copied binary):
 $env:PATH = 'C:\msys64\ucrt64\bin;C:\Windows\System32;C:\msys64\usr\bin;' + $env:PATH
 npm run build:windows-native
 npm run verify:windows-native:artifact
+npm run build:cached
 ```
 
 The addon build lane now also accepts a Windows host; it still targets the
 Node-API level recorded in `native/windows/build/manifest.json`.
+Build and verify the addon before `build:cached`: a fresh checkout does not
+contain the ignored native artifact, which the Windows runtime build requires.
 
 ## Run and verify
 
