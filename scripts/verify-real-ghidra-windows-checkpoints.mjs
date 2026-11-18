@@ -269,11 +269,32 @@ const fingerprint = async (session) => {
     requireOk(record, `pseudo ${procedure}`);
     code.push({ procedure, digest: normalize(record.text), text: record.text });
   }
+  const symbols = await session.call("fingerprint_names", "list_names", {
+    address: PROBE_ADDRESSES[0],
+    detail: "complete",
+  });
+  requireOk(symbols, "list_names");
+  const instructions = await session.call(
+    "fingerprint_instructions",
+    "read_function_instructions",
+    { procedure: PROBE_FUNCTIONS[0] },
+  );
+  requireOk(instructions, "read_function_instructions");
+  const dossier = await session.call(
+    "fingerprint_analysis",
+    "analyze_function",
+    { procedure: PROBE_FUNCTIONS[0], detail: "complete" },
+  );
+  requireOk(dossier, "analyze_function");
   const countMatch = overview.text.match(
     /(?:functions?|procedures?)\D{0,12}(\d+)/iu,
   );
   return {
     overviewText: overview.text,
+    symbolsDigest: normalize(symbols.text),
+    symbolCount: (symbols.text.match(/0x[0-9a-fA-F]+/gu) ?? []).length,
+    instructionsDigest: normalize(instructions.text),
+    dossierDigest: normalize(dossier.text),
     functionCount: unique.length,
     functionCountHint: countMatch ? Number(countMatch[1]) : null,
     addressDigest: createHash("sha256").update(unique.join(",")).digest("hex"),
@@ -613,20 +634,22 @@ const compareFingerprints = (cold, cached) => {
       JSON.stringify(cold.code.map((item) => item.digest)),
       JSON.stringify(cached.code.map((item) => item.digest)),
     ],
+    symbols: [cold.symbolsDigest, cached.symbolsDigest],
+    instructions: [cold.instructionsDigest, cached.instructionsDigest],
+    dossier: [cold.dossierDigest, cached.dossierDigest],
   };
+  const all = Object.values(fields);
   return {
     compared: true,
-    equal:
-      fields.functionCount[0] === fields.functionCount[1] &&
-      fields.addressDigest[0] === fields.addressDigest[1] &&
-      fields.overviewDigest[0] === fields.overviewDigest[1] &&
-      JSON.stringify(fields.xrefs[0]) === JSON.stringify(fields.xrefs[1]) &&
-      JSON.stringify(fields.code[0]) === JSON.stringify(fields.code[1]),
+    equal: all.every(([left, right]) => left === right),
     functionCount: fields.functionCount,
     addressDigest: fields.addressDigest,
     overviewDigest: fields.overviewDigest,
     xrefs: fields.xrefs,
     code: fields.code,
+    symbols: fields.symbols,
+    instructions: fields.instructions,
+    dossier: fields.dossier,
   };
 };
 

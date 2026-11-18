@@ -118,8 +118,11 @@ target is met on fast runs but not consistently; the dominant cost is Ghidra's
 own headless startup and bridge initialisation, not REA's request handling.
 
 Equivalence for the same target: identical function count (3,635), identical
-sorted entry-address digest, and identical `normalized_result` payloads for
-`binary_overview`, the probed `xrefs` addresses and the probed pseudocode.
+sorted entry-address digest, identical `list_names` symbol payload, identical
+`read_function_instructions` stream and `analyze_function` dossier (signature,
+references, value flow) for the probe function, and identical
+`normalized_result` payloads for `binary_overview`, the probed `xrefs`
+addresses and the probed pseudocode.
 
 ## Connecting Trae CN (manual, opt-in)
 
