@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   chmod,
   access,
+  copyFile,
   mkdtemp,
   mkdir,
   readFile,
@@ -32,6 +33,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     ...actual,
     rename: vi.fn(actual.rename),
     rm: vi.fn(actual.rm),
+    copyFile: vi.fn(actual.copyFile),
     open: async (...args: Parameters<typeof actual.open>) => {
       const handle = await actual.open(...args);
       controls.file?.(handle, String(args[0]));
@@ -519,6 +521,32 @@ it.skipIf(process.platform === "win32")(
     );
   },
 );
+
+it("surfaces a cache write failure without publishing a manifest", async () => {
+  const f = await fixture();
+  const selection = await resolveGhidraCheckpoint(
+    join(f.root, "cache"),
+    target,
+    profile,
+    f.resources,
+  );
+  const owner = new GhidraCheckpoint(selection, f.resources);
+  owners.push(owner);
+  await owner.acquire("first");
+  vi.mocked(copyFile).mockRejectedValueOnce(
+    Object.assign(new Error("no space left on device"), { code: "ENOSPC" }),
+  );
+  await expect(owner.publish(f.packed)).rejects.toMatchObject({
+    _tag: "ProviderAdapterError",
+    diagnostics: { reason: "no space left on device", system_code: "ENOSPC" },
+  });
+  await expect(
+    readFile(join(selection.directory, "current.json"), "utf8"),
+  ).rejects.toThrow();
+  // The failure must not poison the owner: a retry after recovery publishes.
+  await owner.publish(f.packed);
+  expect(owner.observation.source).not.toBeNull();
+});
 
 it("separates cache keys by target digest and analysis profile", async () => {
   const f = await fixture();
