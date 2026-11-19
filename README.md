@@ -132,6 +132,8 @@ REA_GHIDRA_RETAINED_TARGETS = 'auto'
 
 这两种方式的适用条件和相较原版的变化，详见[优化原理与对照](DearJIAN-docs/windows-checkpoint-optimization.md#相较原版改了什么)。
 
+2026-11-19 使用三个相同 DLL 副本对旧版与优化版完成了真实 MCP 对照：包括首次分析、两轮切换、磁盘恢复及内存代价，详见[三 DLL 旧版对照报告](DearJIAN-docs/real-baseline-comparison-20261119.md)。
+
 以下是 2026-11-18 在 Windows 11 x64、Ghidra 12.1.4、JDK 21 和两个 DLL 样本上的实测，时间不是速度承诺：
 
 | 测试场景                                               |           优化前 |      优化后 | 说明                                                                             |
